@@ -137,3 +137,40 @@ test('environment credentials override settings without being copied into saved 
   assert.deepEqual(readConfig({ dataDir: dir, env: {} }), { apiKey: 'sk-saved', translationModel: 'gpt-saved' });
   assert.equal(readConfig(options).apiKey, 'sk-environment-only');
 });
+
+test('a stale worker cannot save initial or edited cues after lease takeover', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let now = Date.parse('2026-10-17T00:00:00Z');
+  const a = open(path, { now: () => now });
+  const b = open(path, { now: () => now });
+  const job = a.createJob(makeInput());
+  a.updateJob(job.id, { duration: 10 });
+  a.claimNextJob('a');
+  const cue = { id: 'c1', sourceId: 's1', start: 0, end: 3, original: 'Hello', text: 'Xin chào', readingWarning: false };
+  now += 30_001;
+  assert.equal(b.claimNextJob('b').id, job.id);
+  assert.throws(() => a.saveCues(job.id, 0, [cue], { workerId: 'a' }), { code: 'WORKER_LEASE_LOST' });
+  assert.deepEqual(b.getCues(job.id), []);
+  assert.equal(b.getJob(job.id).subtitleVersion, 0);
+  const saved = b.saveCues(job.id, 0, [cue], { workerId: 'b' });
+  assert.equal(saved.job.subtitleVersion, 1);
+  assert.throws(() => a.saveCues(job.id, 1, [{ id: 'c1', text: 'Stale update' }], { workerId: 'a' }), { code: 'WORKER_LEASE_LOST' });
+  assert.deepEqual(b.getCues(job.id), [cue]);
+  assert.equal(b.getJob(job.id).subtitleVersion, 1);
+  assert.equal(b.saveCues(job.id, 1, [{ id: 'c1', text: 'Chào bạn' }]).job.subtitleVersion, 2, 'browser edits can omit worker fencing');
+});
+
+test('job option updates persist normalized defaults rather than null values', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let store = open(path);
+  const job = store.createJob({ ...makeInput(), targetLanguage: 'ja', subtitleStyle: 'box' });
+  const updated = store.updateJob(job.id, { targetLanguage: null, subtitleStyle: null });
+  assert.equal(updated.targetLanguage, 'vi');
+  assert.equal(updated.subtitleStyle, 'classic');
+  store.close();
+  store = open(path);
+  assert.equal(store.getJob(job.id).targetLanguage, 'vi');
+  assert.equal(store.getJob(job.id).subtitleStyle, 'classic');
+});
