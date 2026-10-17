@@ -5,6 +5,8 @@ import {createServer, request as httpRequest} from 'node:http';
 import {mkdtemp, mkdir, writeFile, readFile, rm, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {fork} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
 import {createStore} from '../lib/store.mjs';
 import {createApi} from '../lib/api.mjs';
 
@@ -130,4 +132,18 @@ test('launcher owns separate children, forwards production and waits for gracefu
   assert.notEqual(studio.children[0].pid,studio.children[1].pid);
   const ready=await Promise.all(studio.children.map(child=>new Promise(resolve=>child.once('message',resolve))));assert.ok(ready[0].args.includes('--production'));
   await studio.stop();for(const child of studio.children){assert.equal(child.exitCode,0);assert.equal(await readFile(path.join(dir,'marker-'+child.pid),'utf8'),'stopped');}
+});
+for(const action of ['shutdown','disconnect'])test(`${action} during Next preparation closes the eventual server`, {timeout:10000},async t=>{
+  const serverUrl=pathToFileURL(path.resolve('server.mjs')).href;
+    const dir=await mkdtemp(path.join(tmpdir(),'vietsub-startup-'));const script=path.join(dir,'child.mjs');const marker=path.join(dir,'closed');
+    await writeFile(script,`import {runWebServer} from ${JSON.stringify(serverUrl)};import {writeFileSync} from 'node:fs';process.on('message',m=>{if(m?.type==='shutdown')process.send({shutdownObserved:true});});process.on('disconnect',()=>console.log('launcher-disconnected'));await runWebServer({port:0,dataDir:${JSON.stringify(path.join(dir,'data'))},nextApp:{prepare:async()=>{process.send({preparing:true});await new Promise(resolve=>process.stdin.once('data',()=>{process.stdin.pause();resolve();}));},getRequestHandler:()=>((req,res)=>res.end('page')),close:async()=>writeFileSync(${JSON.stringify(marker)},'closed')}});console.log('startup-returned');`);
+    const child=fork(script,[],{windowsHide:true,stdio:['pipe','pipe','pipe','ipc']});let output='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>output+=chunk);
+    const exit=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal}));});
+    t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){if(child.connected)child.send({type:'shutdown'});else child.kill();await exit;}await rm(dir,{recursive:true,force:true});});
+    const ready=await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('exit',code=>reject(new Error('Startup child exited early: '+code+' '+output)));});assert.equal(ready.preparing,true);
+    if(action==='shutdown') {const observed=new Promise(resolve=>child.once('message',resolve));child.send({type:'shutdown'});assert.equal((await observed).shutdownObserved,true);}
+    else {const observed=new Promise(resolve=>child.stdout.on('data',()=>{if(output.includes('launcher-disconnected'))resolve();}));child.disconnect();await observed;}
+    const returned=new Promise(resolve=>child.stdout.on('data',()=>{if(output.includes('startup-returned'))resolve();}));child.stdin.end('release preparation');await returned;
+    assert.equal(await readFile(marker,'utf8').catch(()=>null),'closed');
+    const result=await exit;assert.deepEqual(result,{code:0,signal:null});assert.ok(!output.includes('VietSub Studio:'));
 });

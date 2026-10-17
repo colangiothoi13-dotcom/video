@@ -26,12 +26,26 @@ export async function createWebServer({production=false,dataDir=path.resolve(pro
   }catch(error){server?.close();await next?.close?.();store.close();throw error;}
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+/** Register ownership signals before preparation, retaining shutdown until close is possible. */
+export async function runWebServer(options={}) {
+  let server,stopRequested=typeof process.send==='function'&&!process.connected,closing;
+  const removeHandlers=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);process.removeListener('disconnect',stop);process.removeListener('message',message);};
+  const stop=async()=>{
+    stopRequested=true;
+    if(server&&!closing)closing=(async()=>{try{await server.close();}finally{removeHandlers();if(process.connected)process.disconnect();}})();
+    return closing;
+  };
+  const message=value=>{if(value?.type==='shutdown')void stop();};
+  process.once('SIGINT',stop);process.once('SIGTERM',stop);process.once('disconnect',stop);process.on('message',message);
   try {
-    const server=await createWebServer({production:process.argv.includes('--production')});
-    console.log('VietSub Studio: http://127.0.0.1:3000');
-    let stopping=false;const stop=async()=>{if(stopping)return;stopping=true;await server.close();if(process.connected)process.disconnect();};
-    process.once('SIGINT',stop);process.once('SIGTERM',stop);process.once('disconnect',stop);
-    process.on('message',message=>{if(message?.type==='shutdown')void stop();});
-  }catch {console.error('Không thể mở VietSub Studio. Hãy kiểm tra cổng 3000 và dữ liệu ứng dụng.');process.exitCode=1;if(process.connected)process.disconnect();}
+    server=await createWebServer(options);
+    if(stopRequested)await stop();else console.log('VietSub Studio: http://127.0.0.1:3000');
+  }catch {
+    removeHandlers();if(!stopRequested){console.error('Không thể mở VietSub Studio. Hãy kiểm tra cổng 3000 và dữ liệu ứng dụng.');process.exitCode=1;}
+    if(process.connected)process.disconnect();
+  }
+}
+
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+  await runWebServer({production:process.argv.includes('--production')});
 }
