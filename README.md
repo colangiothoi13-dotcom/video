@@ -28,7 +28,7 @@ Mặc định dịch bằng `gpt-5.6-terra`; có thể thay bằng tên mô hìn
 ## Dịch, sửa và tải video
 
 1. Trong **Tạo video**, dán đường dẫn công khai hoặc chọn/kéo tệp video vào vùng tải lên. Chọn ngôn ngữ đích và kiểu phụ đề. Hình phong cảnh chỉ minh họa kiểu chữ.
-2. Bấm **Tạo video có phụ đề**. Tiến độ hiển thị trạng thái thực tế từ bộ xử lý; mỗi lần xử lý một công việc, các video khác xếp hàng. Có thể mở lại trong **Lịch sử video**.
+2. Bấm **Dịch và tạo phụ đề**. Tiến độ hiển thị trạng thái thực tế từ bộ xử lý; mỗi lần xử lý một công việc, các video khác xếp hàng. Có thể mở lại trong **Lịch sử video**.
 3. Khi có phụ đề, nhấn mốc thời gian của đoạn để tua video. Sửa bản dịch rồi bấm **Lưu phụ đề**. Nội dung chưa lưu được giữ khi mất kết nối; không đóng trình duyệt nếu còn bản sửa cần giữ.
 4. Tải **SRT** sau khi lưu. Bấm **Xuất lại** để ghép phiên bản đã lưu vào MP4. MP4 bản cũ vẫn được phân biệt rõ trong lúc chưa có bản mới. Bấm **Tải MP4** khi xuất xong.
 

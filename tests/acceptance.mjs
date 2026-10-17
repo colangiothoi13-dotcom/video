@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request, jobProgress, isJobExpired } from '../lib/client.js';
+import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request, jobProgress, isJobExpired, createNavigationGuard, refreshHealthState } from '../lib/client.js';
 
 // Browser acceptance, run with a real API/key and spoken source before release:
 // 1. Upload + URL independently: choose source, language and both styles; create,
@@ -60,6 +60,37 @@ test('a 410 response expires an already-open result as well as a directly opened
   assert.equal(isJobExpired(null, 410), true);
   assert.equal(isJobExpired({ status: 'expired' }, null), true);
   assert.equal(isJobExpired({ status: 'completed' }, 404), false);
+});
+
+test('cancelling browser Back keeps draft protection for a later sidebar navigation', () => {
+  let route = { screen: 'job', jobId: 'edited' }; let hash = '#job/edited'; let prompts = 0; let allowed = false;
+  const guard = createNavigationGuard({ getRoute: () => route, readHash: () => hash, writeHash: value => { hash = value; }, confirmLeave: () => { prompts++; return allowed; }, applyRoute: next => { route = next; } });
+  guard.setDirty(true);
+  hash = '#history'; guard.handleHashChange();
+  assert.equal(hash, '#job/edited'); assert.equal(prompts, 1);
+  guard.handleHashChange(); // The browser fires this event for the restored hash.
+  guard.navigate('settings');
+  assert.equal(prompts, 2, 'the second navigation must still warn about the dirty editor');
+  assert.equal(hash, '#job/edited'); assert.deepEqual(route, { screen: 'job', jobId: 'edited' });
+  allowed = true; guard.navigate('history'); guard.handleHashChange();
+  assert.equal(prompts, 3); assert.deepEqual(route, { screen: 'history', jobId: null });
+  guard.navigate('settings'); guard.handleHashChange();
+  assert.equal(prompts, 3, 'confirmed departure clears draft protection');
+  assert.deepEqual(route, { screen: 'settings', jobId: null });
+});
+
+test('failed health refresh propagates the error with stale data and retry clears it', async t => {
+  let failing = true;
+  const latest = { ok: true, configured: false, translationModel: 'gpt-5.6-terra', worker: { active: true, workerId: 'worker', heartbeatAt: null }, tools: { ffmpeg: { available: true, subtitles: true }, ffprobe: { available: true }, ytdlp: { available: true, ejs: true }, font: { available: true } } };
+  const server = createServer((req, res) => { res.writeHead(failing ? 503 : 200, { 'content-type': 'application/json' }); res.end(JSON.stringify(failing ? { error: { code: 'UNAVAILABLE', message: 'Máy chủ tạm ngừng. Hãy thử lại.' } } : latest)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
+  const endpoint = `http://127.0.0.1:${server.address().port}/api/health`;
+  const previous = { ...latest, worker: { active: false, workerId: null, heartbeatAt: null } };
+  const failed = await refreshHealthState(previous, endpoint);
+  assert.equal(failed.health, previous); assert.equal(failed.stale, true); assert.equal(failed.error, 'Máy chủ tạm ngừng. Hãy thử lại.');
+  const missing = await refreshHealthState(null, endpoint); assert.equal(missing.health, null); assert.equal(missing.stale, false); assert.ok(missing.error);
+  failing = false; const recovered = await refreshHealthState(previous, endpoint);
+  assert.deepEqual(recovered, { health: latest, stale: false, error: '' });
 });
 
 test('API preserves server error code/status and sends JSON updates correctly', async (t) => {
