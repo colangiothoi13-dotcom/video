@@ -19,15 +19,26 @@ async function setup(t,{failBatch=false,noSpeech=false,tools:overrides={}}={}) {
   const server=http.createServer(async(req,res)=>{
     let body='';for await(const chunk of req)body+=chunk;res.setHeader('content-type','application/json');
     calls.aiProgress.push(store.listJobs('running').map(job=>({stage:job.stage,progress:job.progress})));
-    if(req.url.endsWith('/transcriptions')){calls.transcribe++;res.end(JSON.stringify({duration:3,text:noSpeech?'':'one two three',segments:noSpeech?[]:[0,1,2].map(i=>({id:i,start:i,end:i+1,text:['one','two','three'][i]}))}));return;}
-    const input=JSON.parse(JSON.parse(body).input[1].content);calls.translation.push(input.segments.map(s=>s.id));
-    if(failBatch&&input.segments[0].id==='1'){res.statusCode=401;res.end(JSON.stringify({error:{code:'invalid_api_key'}}));return;}
-    res.end(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({segments:input.segments.map(s=>({id:s.id,text:`Dịch ${s.text}`}))})}]}],usage:{input_tokens:4,output_tokens:3,total_tokens:7}}));
+    const origin=`http://127.0.0.1:${server.address().port}`;
+    const file={name:'files/fixture-audio',uri:`${origin}/v1beta/files/fixture-audio`,mimeType:'audio/mp3',state:'ACTIVE'};
+    if(req.method==='POST'&&req.url==='/upload/v1beta/files'){res.setHeader('x-goog-upload-url',`${origin}/upload/session`);res.end('{}');return;}
+    if(req.method==='POST'&&req.url==='/upload/session'){res.end(JSON.stringify({file}));return;}
+    if(req.url==='/v1beta/files/fixture-audio'){res.end(JSON.stringify(req.method==='DELETE'?{}:file));return;}
+    if(req.method!=='POST'||req.url!=='/v1beta/interactions'){res.statusCode=404;res.end('{}');return;}
+    const request=JSON.parse(body);
+    const completed=(text,annotations)=>({status:'completed',steps:[{type:'model_output',content:[{type:'text',text,...(annotations?{annotations}:{})}]}],usage:{total_input_tokens:4,total_output_tokens:3,total_tokens:7}});
+    if(request.generation_config?.transcription_config){
+      calls.transcribe++;const words=noSpeech?[]:[0,1,2].map(i=>({type:'word_info',text:['one.','two.','three.'][i],start_offset:`${i}.000s`,end_offset:`${i}.900s`}));
+      res.end(JSON.stringify(completed(noSpeech?'':'one. two. three.',words)));return;
+    }
+    const input=JSON.parse(request.input);calls.translation.push(input.segments.map(s=>s.id));
+    if(failBatch&&input.segments[0].id==='s2'){res.statusCode=401;res.end(JSON.stringify({error:{code:401,status:'UNAUTHENTICATED',message:'fixture rejected'}}));return;}
+    res.end(JSON.stringify(completed(JSON.stringify({segments:input.segments.map(s=>({id:s.id,text:`Dịch ${s.text}`}))}))));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const tools={runProcess:async(_,args,{signal})=>{signal?.throwIfAborted();await writeFile(args.at(-1),'JPEG fixture');},probeVideo:async()=>({duration:3,width:640,height:360,hasAudio:true}),extractAudio:async(_,output)=>{await writeFile(output,'mp3');return {path:output};},renderVideo:async({outputPath,signal})=>{signal?.throwIfAborted();calls.render++;await writeFile(outputPath,`mp4-${calls.render}`);return {duration:3,width:640,height:360,hasAudio:true};},...overrides};
-  const config={apiKey:'fixture-secret',translationModel:'gpt-5.6-terra',translationBatchSize:1};
-  const aiOptions={apiBase:`http://127.0.0.1:${server.address().port}/v1`,retryDelayMs:1};
+  const config={provider:'gemini',apiKey:'fixture-secret',translationModel:'gemini-3.5-flash-lite',transcriptionModel:'gemini-3.5-transcribe',translationBatchSize:1};
+  const aiOptions={apiBase:`http://127.0.0.1:${server.address().port}/v1beta`,uploadBase:`http://127.0.0.1:${server.address().port}/upload/v1beta`,retryDelayMs:1};
   const ai={transcribe:(file,options)=>realAi.transcribe(file,{...options,...aiOptions}),translateSegments:(segments,options)=>realAi.translateSegments(segments,{...options,...aiOptions})};
   const pipeline=createPipeline({store,tools,ai,config,dataDir:dir,workerId:'worker-a'});
   t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));for(const extra of extraStores)extra.close();store.close();await rm(dir,{recursive:true,force:true});});
@@ -40,9 +51,39 @@ test('real SQLite checkpoints resume only untranslated batches after restart, wi
   f.store.updateJob(job.id,{status:'queued',error:null});f.setFailBatch(false);
   f.store.claimNextJob('worker-a');const restarted=createPipeline({store:f.store,tools:f.tools,ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await restarted.runJob(job.id);
   const result=f.store.getJob(job.id);assert.equal(result.status,'completed');assert.equal(result.subtitleVersion,1);assert.equal(result.renderedVersion,1);assert.equal(f.calls.transcribe,1);
-  assert.deepEqual(f.calls.translation,[['0'],['1'],['1'],['2']]);assert.equal(result.usage.translation.length,3);assert.equal(result.usage.audioSeconds,3);
-  assert.equal(result.usage.translation[0].model,'gpt-5.6-terra');assert.equal(result.usage.translation[0].language,'vi');assert.equal(result.usage.transcription[0].model,'whisper-1');
+  assert.deepEqual(f.calls.translation,[['s1'],['s2'],['s2'],['s3']]);assert.equal(result.usage.translation.length,3);assert.equal(result.usage.audioSeconds,3);
+  assert.equal(result.usage.translation[0].model,'gemini-3.5-flash-lite');assert.equal(result.usage.translation[0].provider,'gemini');assert.equal(result.usage.translation[0].language,'vi');assert.equal(result.usage.transcription[0].model,'gemini-3.5-transcribe');assert.equal(result.usage.transcription[0].provider,'gemini');
   assert.equal(await readFile(f.store.getJobInternal(job.id).artifacts.videoPath,'utf8'),'mp4-1');assert.match(await readFile(f.store.getJobInternal(job.id).artifacts.srtPath,'utf8'),/Dịch three/);
+});
+
+test('a run captures one coherent configuration and supplies duration to timed transcription',async t=>{
+  const f=await setup(t);const job=await f.job();let reads=0,asrOptions,translationOptions;
+  const pipeline=createPipeline({store:f.store,dataDir:f.dir,workerId:'worker-a',config:()=>{reads++;return f.config;},tools:{...f.tools,extractAudio:async(_,output)=>{
+    f.config.apiKey='changed-key';f.config.translationModel='gemini-changed';await writeFile(output,'mp3');
+  }},ai:{transcribe:async(_,options)=>{asrOptions=options;return {segments:[{id:'s1',sourceId:'s1',start:0,end:2,text:'Hello'}],usage:{model:'gemini-transcribe-version',audioSeconds:3}};},translateSegments:async(segments,options)=>{
+    translationOptions=options;return {segments:segments.map(item=>({...item,text:'Xin chào'})),usage:{model:'gemini-translation-version'}};
+  }}});
+  f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);assert.equal(result.status,'completed');assert.equal(reads,1);
+  assert.equal(asrOptions.apiKey,'fixture-secret');assert.equal(asrOptions.duration,3);assert.equal(asrOptions.model,'gemini-3.5-transcribe');
+  assert.equal(translationOptions.apiKey,'fixture-secret');assert.equal(translationOptions.model,'gemini-3.5-flash-lite');
+  assert.equal(result.usage.transcription[0].provider,'gemini');assert.equal(result.usage.transcription[0].model,'gemini-transcribe-version');
+  assert.equal(result.usage.translation[0].provider,'gemini');assert.equal(result.usage.translation[0].model,'gemini-translation-version');
+});
+
+test('Gemini resumes valid legacy checkpoints without repeating ASR or changing historical usage',async t=>{
+  const f=await setup(t);const job=await f.job();let asrCalls=0;const batches=[];
+  const historicalAsr={model:'whisper-1',audioSeconds:3,completedAt:'2026-10-16T00:00:00.000Z'};
+  const historicalTranslation={provider:'openai',model:'gpt-legacy',ids:['old1'],input_tokens:7};
+  f.store.updateJob(job.id,{checkpoint:{transcription:[{id:'old1',start:0,end:1,text:'One'},{id:'old2',start:1,end:2,text:'Two'}],translations:[{id:'old1',text:'Đã dịch'}]},usage:{transcription:[historicalAsr],translation:[historicalTranslation]}});
+  const pipeline=createPipeline({store:f.store,tools:f.tools,config:f.config,dataDir:f.dir,workerId:'worker-a',ai:{transcribe:async()=>{asrCalls++;throw new Error('ASR must not repeat');},translateSegments:async(segments)=>{
+    batches.push(segments.map(item=>item.id));return {segments:segments.map(item=>({...item,text:'Mới dịch'})),usage:{model:'gemini-3.5-flash-lite'}};
+  }}});
+  f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);assert.equal(result.status,'completed');assert.equal(asrCalls,0);assert.deepEqual(batches,[['old2']]);
+  assert.deepEqual(result.usage.transcription,[historicalAsr]);assert.deepEqual(result.usage.translation[0],historicalTranslation);
+  assert.equal(result.usage.translation[1].provider,'gemini');assert.equal(result.usage.translation[1].model,'gemini-3.5-flash-lite');
+  assert.deepEqual(f.store.getCues(job.id).map(item=>item.text),['Đã dịch','Mới dịch']);
 });
 test('two real store connections cannot duplicate provider work or reset a live job',async t=>{
   let release;const gate=new Promise(resolve=>release=resolve);let entered=false;
@@ -164,7 +205,7 @@ test('render captures cues and version through one atomic SQLite snapshot',async
     const current=editor.getJob(id);editor.saveCues(id,current.subtitleVersion,editor.getCues(id).map(cue=>({...cue,text:'Chỉnh sửa đồng thời'})));return target.getCues(id);
   };return target[key];}});
   const pipeline=createPipeline({store:racingStore,tools:{...f.tools,renderVideo:async({outputPath,cues})=>{captured=cues[0].text;await writeFile(outputPath,'mp4');}},ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await pipeline.runJob(job.id);
-  assert.equal(captured,'Dịch one');assert.equal(f.store.getJob(job.id).renderedVersion,1);assert.equal(f.store.getJob(job.id).status,'completed');
+  assert.equal(captured,'Dịch one.');assert.equal(f.store.getJob(job.id).renderedVersion,1);assert.equal(f.store.getJob(job.id).status,'completed');
 });
 test('valid source gets a poster; optional thumbnail errors do not block translation',async t=>{
   const f=await setup(t);const job=await f.job();f.store.claimNextJob('worker-a');await f.pipeline.runJob(job.id);

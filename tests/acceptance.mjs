@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import * as client from '../lib/client.js';
 import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request, jobProgress, isJobExpired, createNavigationGuard, refreshHealthState } from '../lib/client.js';
 
-// Browser acceptance, run with a real API/key and spoken source before release:
+// Browser acceptance, run with a real Gemini API key and spoken source before release:
 // 1. Upload + URL independently: choose source, language and both styles; create,
 //    observe actual stage/progress, open real video and seek through the last cue.
 // 2. Edit cue, leave/reload warning, save, download UTF-8 SRT, render saved version,
@@ -17,7 +17,7 @@ import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request
 //    horizontal scrolling; keyboard labels/focus and mobile navigation work.
 // 7. User-approved duration cap is 25 minutes / 1500 seconds: verify a spoken
 //    source at the boundary is accepted and >1500 seconds is rejected by probe.
-//    No API key is presently configured; paid upload/URL E2E remains unverified.
+//    The Gemini migration has not been verified with a live key; upload/URL AI E2E remains unverified.
 
 test('unsupported source switches after polling completes and reloads every rendered version without duplicate captions',()=>{
   assert.equal(typeof client.previewMedia,'function','preview resource must follow current job and source failure');
@@ -96,7 +96,7 @@ test('cancelling browser Back keeps draft protection for a later sidebar navigat
 
 test('failed health refresh propagates the error with stale data and retry clears it', async t => {
   let failing = true;
-  const latest = { ok: true, configured: false, translationModel: 'gpt-5.6-terra', worker: { active: true, workerId: 'worker', heartbeatAt: null }, tools: { ffmpeg: { available: true, subtitles: true }, ffprobe: { available: true }, ytdlp: { available: true, ejs: true }, font: { available: true } } };
+  const latest = { ok: true, configured: false, provider: 'gemini', translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-transcribe', worker: { active: true, workerId: 'worker', heartbeatAt: null }, tools: { ffmpeg: { available: true, subtitles: true }, ffprobe: { available: true }, ytdlp: { available: true, ejs: true }, font: { available: true } } };
   const server = createServer((req, res) => { res.writeHead(failing ? 503 : 200, { 'content-type': 'application/json' }); res.end(JSON.stringify(failing ? { error: { code: 'UNAVAILABLE', message: 'Máy chủ tạm ngừng. Hãy thử lại.' } } : latest)); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
   const endpoint = `http://127.0.0.1:${server.address().port}/api/health`;

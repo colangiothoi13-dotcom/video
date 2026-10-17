@@ -28,12 +28,31 @@ async function fixture(t, options={}) {
 test('settings remain secret and health caches expensive tool checks',async t=>{
   const f=await fixture(t);
   assert.equal((await f.call('/settings/test',{method:'POST'})).status,400);
-  const saved=await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'sk-private-test',translationModel:'test-model'})});
-  assert.deepEqual(await saved.json(),{configured:true,translationModel:'test-model'});
+  const saved=await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'sk-private-test',translationModel:'gemini-test-model'})});
+  assert.deepEqual(await saved.json(),{provider:'gemini',configured:true,translationModel:'gemini-test-model',transcriptionModel:'gemini-3.5-transcribe'});
   const text=await (await f.call('/settings')).text();assert.ok(!text.includes('sk-private'));
   const health=await (await f.call('/health')).json();await f.call('/health');
   assert.equal(health.configured,true);assert.deepEqual(health.worker,{active:false,workerId:null,heartbeatAt:null});assert.equal(health.tools.ytdlp.available,false);assert.equal(f.probes(),1);
   assert.equal((await f.call('/settings',{method:'PUT',body:JSON.stringify({translationModel:'x',baseUrl:'https://evil.example'})})).status,400);
+});
+
+test('settings reject another provider model with a safe Gemini instruction and preserve the saved model',async t=>{
+  const f=await fixture(t);
+  await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'fixture-gemini-key'})});
+  const response=await f.call('/settings',{method:'PUT',body:JSON.stringify({translationModel:'gpt-5.6-terra'})});
+  assert.equal(response.status,400);const payload=await response.json();
+  assert.equal(payload.error.code,'INVALID_GEMINI_MODEL');assert.match(payload.error.message,/Gemini/);
+  assert.equal((await(await f.call('/settings')).json()).translationModel,'gemini-3.5-flash-lite');
+});
+
+test('connection check uses both Gemini models and exposes actual models without the key',async t=>{
+  let received;const f=await fixture(t,{tools:{testAiConnection:async options=>{
+    received=options;return {ok:true,translationModel:options.model,transcriptionModel:options.transcriptionModel};
+  }}});
+  await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'fixture-gemini-secret',translationModel:'gemini-custom'})});
+  const response=await f.call('/settings/test',{method:'POST'});assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ok:true,provider:'gemini',translationModel:'gemini-custom',transcriptionModel:'gemini-3.5-transcribe'});
+  assert.equal(received.apiKey,'fixture-gemini-secret');assert.equal(received.model,'gemini-custom');assert.equal(received.transcriptionModel,'gemini-3.5-transcribe');
 });
 test('mutation guard rejects foreign Origin, foreign Host and oversized JSON',async t=>{
   const f=await fixture(t);

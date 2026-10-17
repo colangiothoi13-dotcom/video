@@ -21,9 +21,13 @@ Sau lần cài đầu, nhấp đúp **Khoi-dong.cmd**. Launcher cài phụ thu�
 
 ## Khóa API và mô hình
 
-Trong **Cài đặt**, nhập khóa OpenAI API của bạn và bấm **Lưu cài đặt**, sau đó **Kiểm tra kết nối**. Kiểm tra này xác nhận quyền truy cập; cần chạy video có lời nói để kiểm tra đầy đủ quy trình. Khóa không được hiển thị lại, không lưu trong localStorage và không đưa vào Git. Để trống ô thay khóa khi muốn giữ nguyên khóa hiện tại.
+Trong **Cài đặt**, nhập khóa Gemini API được tạo tại [Google AI Studio](https://aistudio.google.com/api-keys), bấm **Lưu cài đặt**, sau đó **Kiểm tra kết nối**. Kiểm tra này chỉ đọc quyền truy cập mô hình, chưa xác nhận hạn mức hoặc xử lý video; cần chạy video có lời nói để kiểm tra đầy đủ quy trình. Khóa không được hiển thị lại, không lưu trong localStorage và không đưa vào Git. Để trống ô thay khóa khi muốn giữ nguyên khóa Gemini hiện tại.
 
-Mặc định dịch bằng `gpt-5.6-terra`; có thể thay bằng tên mô hình mà tài khoản của bạn được cấp quyền. Nhận dạng dùng `whisper-1`. Chi phí dịch vụ AI tính theo tài khoản của bạn. Nếu cấu hình qua biến môi trường `OPENAI_API_KEY` hoặc `OPENAI_TRANSLATION_MODEL`, biến môi trường được ưu tiên hơn cài đặt trên đĩa.
+Mặc định dịch bằng `gemini-3.5-flash-lite`; có thể thay bằng tên mô hình Gemini mà tài khoản của bạn được cấp quyền. Nhận dạng lời nói và mốc thời gian dùng `gemini-3.5-transcribe`. Cả hai bước đều dùng Google Gemini API; ứng dụng không gọi OpenAI hoặc tự chuyển sang OpenAI khi gặp lỗi.
+
+Gemini có hạn mức miễn phí, không phải sử dụng không giới hạn; khả năng truy cập và hạn mức phụ thuộc tài khoản, khu vực và mô hình. Google tính phí nếu bạn dùng gói trả phí. Theo [bảng giá Gemini và chính sách dữ liệu](https://ai.google.dev/gemini-api/docs/pricing), nội dung gửi qua gói miễn phí được dùng để cải thiện sản phẩm Google. Âm thanh và nội dung phụ đề được gửi tới Google để xử lý.
+
+Có thể cấu hình qua `GEMINI_API_KEY` và `GEMINI_TRANSLATION_MODEL`; biến môi trường Gemini được ưu tiên hơn cài đặt trên đĩa và không được sao chép vào tệp cấu hình. Cấu hình OpenAI cũ và các biến `OPENAI_API_KEY` / `OPENAI_TRANSLATION_MODEL` không được sử dụng. Tệp cấu hình cũ được giữ nguyên cho đến khi bạn lưu cài đặt Gemini; cần nhập khóa Gemini mới trước khi tạo công việc mới. Checkpoint lời nói/bản dịch hợp lệ từ công việc cũ vẫn được dùng để tiếp tục xử lý, giữ nguyên ghi nhận sử dụng trước đó.
 
 ## Dịch, sửa và tải video
 
@@ -44,7 +48,9 @@ Giữ cửa sổ launcher/terminal mở đến khi công việc hoàn thành. Th
 
 Dữ liệu ứng dụng, cấu hình máy chủ, cơ sở dữ liệu và các tệp công việc nằm trong `.data` bên trong thư mục `web`; công cụ tải về nằm trong `.tools`. Hai thư mục đều được loại khỏi Git. Khóa API ở cấu hình máy chủ là bí mật; hạn chế quyền truy cập máy/thư mục này. Bản gốc mà bạn tải lên từ máy không bị thay đổi.
 
-Kết quả được giữ 24 giờ kể từ **lần xuất thành công đầu tiên**, xuất lại không gia hạn. Công việc lỗi/hủy được giữ 24 giờ từ trạng thái đó. Phiên tải lên dở được dọn sau một giờ không hoạt động. Dọn dẹp chạy mỗi 15 phút và bảo vệ tệp đang xử lý. Hãy tải MP4/SRT cần giữ trước thời điểm hết hạn hiển thị trong trình biên tập.
+Kết quả trên máy được giữ 24 giờ kể từ **lần xuất thành công đầu tiên**, xuất lại không gia hạn. Công việc lỗi/hủy được giữ 24 giờ từ trạng thái đó. Phiên tải lên dở được dọn sau một giờ không hoạt động. Dọn dẹp chạy mỗi 15 phút và bảo vệ tệp đang xử lý. Hãy tải MP4/SRT cần giữ trước thời điểm hết hạn hiển thị trong trình biên tập.
+
+Thời hạn 24 giờ chỉ áp dụng dữ liệu trên máy. Ứng dụng yêu cầu xóa tệp âm thanh tạm trên Google sau khi xử lý; nếu xóa không thành công, [Gemini Files tự hết hạn sau 48 giờ](https://ai.google.dev/gemini-api/docs/files). Chính sách dữ liệu của Google vẫn áp dụng cho nội dung đã gửi.
 
 ## Khi gặp lỗi
 
@@ -66,4 +72,4 @@ npm run build
 
 `tests/acceptance.mjs` có các ca tự động cho giao ước phía trình duyệt và danh sách kiểm tra nghiệm thu UI/E2E. Nghiệm thu hai luồng upload/URL cần khóa API hợp lệ, video có lời nói và kiểm tra MP4/SRT đến cuối video; kiểm tra kết nối riêng lẻ không thay thế các ca này.
 
-Trạng thái bàn giao hiện tại: máy chưa có khóa API, vì vậy chưa xác minh trọn vẹn hai luồng AI trả phí. HTTP local và giao ước đã được kiểm tra; môi trường không có trình duyệt tự động khả dụng nên chưa có kiểm tra trực quan/screenshot desktop và mobile. Nhập khóa trực tiếp trong Cài đặt khi bạn muốn dùng dịch vụ AI; không cần gửi khóa trong trò chuyện.
+Trạng thái chuyển đổi Gemini: chưa xác minh hai luồng upload/URL bằng khóa Gemini thật hoặc kiểm tra độ chính xác mốc thời gian trên video có lời nói. Các kiểm tra HTTP local dùng phản hồi Gemini mô phỏng để xác minh giao ước và khả năng tiếp tục checkpoint; chúng không thay thế kiểm tra dịch vụ thực tế. Nhập khóa trực tiếp trong Cài đặt khi bạn muốn dùng Gemini; không cần gửi khóa trong trò chuyện.

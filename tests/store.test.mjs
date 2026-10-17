@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -116,26 +116,54 @@ test('configuration persists server secrets while public status never returns th
   const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
   const { dir } = fixture(t);
   const options = { dataDir: dir, env: {} };
-  assert.deepEqual(getConfigStatus(options), { configured: false, translationModel: 'gpt-5.6-terra' });
-  const status = writeConfig({ apiKey: 'sk-secret-unit-test', translationModel: 'gpt-example' }, options);
-  assert.deepEqual(status, { configured: true, translationModel: 'gpt-example' });
-  assert.equal(readConfig(options).apiKey, 'sk-secret-unit-test');
-  writeConfig({ translationModel: 'gpt-second' }, options);
-  assert.equal(readConfig(options).apiKey, 'sk-secret-unit-test');
+  assert.deepEqual(getConfigStatus(options), { provider: 'gemini', configured: false, translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-transcribe' });
+  const status = writeConfig({ apiKey: 'gemini-secret-unit-test', translationModel: 'gemini-example' }, options);
+  assert.deepEqual(status, { provider: 'gemini', configured: true, translationModel: 'gemini-example', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.equal(readConfig(options).apiKey, 'gemini-secret-unit-test');
+  writeConfig({ translationModel: 'gemini-second' }, options);
+  assert.equal(readConfig(options).apiKey, 'gemini-secret-unit-test');
+  assert.equal(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).provider, 'gemini');
   assert.equal(JSON.stringify(getConfigStatus(options)).includes('secret'), false);
 });
 
 test('environment credentials override settings without being copied into saved configuration', async t => {
   const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
   const { dir } = fixture(t);
-  const options = { dataDir: dir, env: { OPENAI_API_KEY: 'sk-environment-only', OPENAI_TRANSLATION_MODEL: 'gpt-environment' } };
-  writeConfig({ translationModel: 'gpt-saved' }, options);
-  assert.deepEqual(readConfig(options), { apiKey: 'sk-environment-only', translationModel: 'gpt-environment' });
-  assert.deepEqual(getConfigStatus(options), { configured: true, translationModel: 'gpt-environment' });
-  assert.equal(readFileSync(join(dir, 'config.json'), 'utf8').includes('sk-environment-only'), false);
-  writeConfig({ apiKey: 'sk-saved' }, options);
-  assert.deepEqual(readConfig({ dataDir: dir, env: {} }), { apiKey: 'sk-saved', translationModel: 'gpt-saved' });
-  assert.equal(readConfig(options).apiKey, 'sk-environment-only');
+  const options = { dataDir: dir, env: { GEMINI_API_KEY: 'gemini-environment-only', GEMINI_TRANSLATION_MODEL: 'gemini-environment' } };
+  writeConfig({ translationModel: 'gemini-saved' }, options);
+  assert.deepEqual(readConfig(options), { provider: 'gemini', apiKey: 'gemini-environment-only', translationModel: 'gemini-environment', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.deepEqual(getConfigStatus(options), { provider: 'gemini', configured: true, translationModel: 'gemini-environment', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.equal(readFileSync(join(dir, 'config.json'), 'utf8').includes('gemini-environment-only'), false);
+  writeConfig({ apiKey: 'gemini-saved' }, options);
+  assert.deepEqual(readConfig({ dataDir: dir, env: {} }), { provider: 'gemini', apiKey: 'gemini-saved', translationModel: 'gemini-saved', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.equal(readConfig(options).apiKey, 'gemini-environment-only');
+});
+
+test('legacy OpenAI disk and environment settings cannot configure Gemini and disk remains untouched until saved', async t => {
+  const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
+  const { dir } = fixture(t);
+  const legacy = JSON.stringify({ apiKey: 'legacy-openai-secret', translationModel: 'gpt-legacy' });
+  const file = join(dir, 'config.json'); writeFileSync(file, legacy);
+  const options = { dataDir: dir, env: { OPENAI_API_KEY: 'old-env-secret', OPENAI_TRANSLATION_MODEL: 'gpt-old-env' } };
+  assert.equal(getConfigStatus(options).configured, false);
+  assert.deepEqual(readConfig(options), { provider: 'gemini', apiKey: '', translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.equal(readFileSync(file, 'utf8'), legacy);
+  writeConfig({ apiKey: 'new-gemini-secret' }, options);
+  assert.equal(readConfig(options).apiKey, 'new-gemini-secret');
+  assert.equal(readConfig(options).translationModel, 'gemini-3.5-flash-lite');
+  assert.equal(readFileSync(file, 'utf8').includes('legacy-openai-secret'), false);
+});
+
+test('non-Gemini model settings fail before changing the saved key or model', async t => {
+  const { readConfig, writeConfig } = await import(configModule);
+  const { dir } = fixture(t); const options = { dataDir: dir, env: {} };
+  writeConfig({ apiKey: 'gemini-key', translationModel: 'gemini-current' }, options);
+  const before = readFileSync(join(dir, 'config.json'), 'utf8');
+  for (const translationModel of ['gpt-5.6-terra', 'whisper-1', 'https://evil.example/model']) {
+    assert.throws(() => writeConfig({ apiKey: 'replacement-key', translationModel }, options), { code: 'INVALID_GEMINI_MODEL' });
+    assert.equal(readFileSync(join(dir, 'config.json'), 'utf8'), before);
+  }
+  assert.throws(() => readConfig({ ...options, env: { GEMINI_TRANSLATION_MODEL: 'gpt-environment' } }), { code: 'INVALID_GEMINI_MODEL' });
 });
 
 test('a stale worker cannot save initial or edited cues after lease takeover', async t => {
