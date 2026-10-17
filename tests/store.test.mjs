@@ -174,3 +174,57 @@ test('job option updates persist normalized defaults rather than null values', a
   assert.equal(store.getJob(job.id).targetLanguage, 'vi');
   assert.equal(store.getJob(job.id).subtitleStyle, 'classic');
 });
+
+test('unknown progress stays null until measured progress is saved', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let store = open(path);
+  const job = store.createJob(makeInput());
+  assert.equal(job.progress, null);
+  assert.equal(store.claimNextJob('worker').progress, null);
+  assert.equal(store.updateJob(job.id, { stage: 'render', progress: 25 }).progress, 25);
+  assert.equal(store.updateJob(job.id, { progress: null }).progress, null);
+  for (const progress of [-1, 101, Infinity, NaN, '25']) {
+    assert.throws(() => store.updateJob(job.id, { progress }), { code: 'INVALID_JOB' });
+  }
+  store.close();
+  store = open(path);
+  assert.equal(store.getJob(job.id).progress, null);
+});
+
+test('cue snapshots persist matching versions and text while omitting private artifacts', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let store = open(path);
+  const job = store.createJob({ ...makeInput(), artifacts: { source: 'D:\\private\\source.mp4' } });
+  store.updateJob(job.id, { duration: 10, checkpoint: { secretPath: 'D:\\private\\audio.mp3' } });
+  const cue = { id: 'c1', sourceId: 's1', start: 0, end: 3, original: 'Hello', text: 'Xin chào', readingWarning: false };
+  store.saveCues(job.id, 0, [cue]);
+  const first = store.getCueSnapshot(job.id);
+  assert.equal(first.job.subtitleVersion, 1);
+  assert.deepEqual(first.cues, [cue]);
+  store.saveCues(job.id, 1, [{ id: 'c1', text: 'Chào bạn' }]);
+  assert.equal(first.job.subtitleVersion, 1, 'snapshots remain detached from later updates');
+  assert.equal(first.cues[0].text, 'Xin chào');
+  store.close();
+  store = open(path);
+  const second = store.getCueSnapshot(job.id);
+  assert.equal(second.job.subtitleVersion, 2);
+  assert.deepEqual(second.cues, [{ ...cue, text: 'Chào bạn' }]);
+  assert.equal('artifacts' in second.job, false);
+  assert.equal('checkpoint' in second.job, false);
+  assert.equal(JSON.stringify(second).includes('private'), false);
+});
+
+test('reading speed counts emoji graphemes consistently with subtitle normalization', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  const store = open(path);
+  const job = store.createJob(makeInput());
+  store.updateJob(job.id, { duration: 2 });
+  const family = '👨‍👩‍👧‍👦';
+  const cue = { id: 'c1', sourceId: 's1', start: 0, end: 1, original: 'Hello', text: family.repeat(4) };
+  assert.equal(store.saveCues(job.id, 0, [cue]).cues[0].readingWarning, false);
+  assert.equal(store.saveCues(job.id, 1, [{ id: 'c1', text: family.repeat(23) }]).cues[0].readingWarning, true);
+  assert.equal(store.saveCues(job.id, 2, [{ id: 'c1', text: '12345678901 12345678901' }]).cues[0].readingWarning, true);
+});
