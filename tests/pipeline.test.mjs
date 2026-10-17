@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,stat,utimes} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,stat,utimes} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
 import http from 'node:http';
@@ -171,4 +171,29 @@ test('valid source gets a poster; optional thumbnail errors do not block transla
   const poster=f.store.getJobInternal(job.id).artifacts.posterPath;assert.ok(poster);assert.equal(await readFile(poster,'utf8'),'JPEG fixture');
   const broken=await setup(t,{tools:{runProcess:async()=>{throw new Error('private-fixture-key C:\\path');}}});const other=await broken.job();broken.store.claimNextJob('worker-a');await broken.pipeline.runJob(other.id);
   assert.equal(broken.store.getJob(other.id).status,'completed');assert.equal(broken.store.getJob(other.id).error,null);assert.equal(broken.store.getJobInternal(other.id).artifacts.posterPath,undefined);
+});
+for(const rerender of [false,true])test(`accepted cancellation wins atomic ${rerender?'re-render':'initial render'} publication`,async t=>{
+  const f=await setup(t);const job=await f.job();f.store.claimNextJob('worker-a');
+  if(rerender){await f.pipeline.runJob(job.id);f.store.saveCues(job.id,1,f.store.getCues(job.id).map(cue=>({...cue,text:'Bản mới'})));f.store.updateJob(job.id,{status:'queued',renderRequested:true});f.store.claimNextJob('worker-a');}
+  const before=f.store.getJobInternal(job.id);const directory=path.join(f.dir,'jobs',job.id);const filesBefore=rerender?(await readdir(directory)).sort():null;
+  const api=createStore(path.join(f.dir,'jobs.sqlite'));f.extraStores.push(api);let accepted;
+  const racingStore=new Proxy(f.store,{get(target,key){if(key==='updateJob')return (id,patch,options)=>{
+    if(patch.status==='completed')accepted=api.requestCancellation(id);return target.updateJob(id,patch,options);
+  };return target[key];}});
+  const pipeline=createPipeline({store:racingStore,tools:f.tools,ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await pipeline.runJob(job.id);
+  const after=f.store.getJobInternal(job.id);assert.equal(accepted.status,'running');assert.equal(after.status,'cancelled');assert.equal(after.cancelRequested,true);assert.equal(after.error,null);
+  assert.equal(after.renderedVersion,before.renderedVersion);assert.equal(after.artifacts.videoPath,before.artifacts.videoPath);assert.equal(after.artifacts.srtPath,before.artifacts.srtPath);
+  const filesAfter=(await readdir(directory)).sort();assert.ok(filesAfter.every(file=>!file.startsWith('.pending-')));
+  if(rerender){assert.deepEqual(filesAfter,filesBefore);assert.equal(await readFile(before.artifacts.videoPath,'utf8'),'mp4-1');}
+  else assert.ok(filesAfter.every(file=>!file.startsWith('video-v')&&!file.startsWith('subtitles-v')));
+});
+for(const delta of [-1,0,1])test(`re-render publication checks the original deadline at offset ${delta}ms`,async t=>{
+  const f=await setup(t);const job=await f.job();f.store.claimNextJob('worker-a');await f.pipeline.runJob(job.id);const before=f.store.getJobInternal(job.id);const deadline=Date.parse(before.expiresAt);
+  f.store.saveCues(job.id,1,f.store.getCues(job.id).map(cue=>({...cue,text:'Bản mới'})));f.store.releaseWorker('worker-a');f.setNow(deadline-2);f.store.updateJob(job.id,{status:'queued',renderRequested:true});f.store.claimNextJob('worker-a');
+  const directory=path.join(f.dir,'jobs',job.id);const filesBefore=(await readdir(directory)).sort();let reachedPublication=false;
+  const racingStore=new Proxy(f.store,{get(target,key){if(key==='updateJob')return (id,patch,options)=>{if(patch.status==='completed'){reachedPublication=true;f.setNow(deadline+delta);}return target.updateJob(id,patch,options);};return target[key];}});
+  const pipeline=createPipeline({store:racingStore,tools:f.tools,ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await pipeline.runJob(job.id);
+  const after=f.store.getJobInternal(job.id);assert.equal(reachedPublication,true);assert.equal(after.expiresAt,before.expiresAt);
+  if(delta<0){assert.equal(after.status,'completed');assert.equal(after.renderedVersion,2);assert.notEqual(after.artifacts.videoPath,before.artifacts.videoPath);}
+  else {assert.equal(after.status,'expired');assert.equal(after.error,null);assert.equal(after.renderedVersion,1);assert.equal(after.artifacts.videoPath,before.artifacts.videoPath);assert.equal(after.artifacts.srtPath,before.artifacts.srtPath);assert.equal(await readFile(before.artifacts.videoPath,'utf8'),'mp4-1');assert.deepEqual((await readdir(directory)).sort(),filesBefore);}
 });

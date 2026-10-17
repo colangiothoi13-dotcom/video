@@ -281,3 +281,23 @@ test('expired cancellation and guarded updates reject without mutating the job',
     assert.deepEqual(store.getJobInternal(job.id), before);
   }
 });
+
+test('guarded worker publication atomically rejects an accepted cancellation without changing artifacts',async t=>{
+  const {createStore}=await import(storeModule);const {path,open}=fixture(t,createStore);
+  const worker=open(path);const api=open(path);const job=api.createJob({...makeInput(),artifacts:{videoPath:'previous.mp4'}});worker.claimNextJob('worker');
+  assert.equal(api.requestCancellation(job.id).status,'running');const before=api.getJobInternal(job.id);
+  assert.throws(()=>worker.updateJob(job.id,{status:'completed',renderedVersion:2,artifacts:{videoPath:'replacement.mp4'}},{workerId:'worker',expectedStatuses:['running'],requireUnexpired:true,requireNotCancelled:true}),{code:'JOB_CANCELLED'});
+  assert.deepEqual(api.getJobInternal(job.id),before);
+});
+
+test('worker publication deadline is exclusive and retains lease and state guards',async t=>{
+  const {createStore}=await import(storeModule);const {path,open}=fixture(t,createStore);let now=Date.parse('2026-10-17T00:00:00Z');const store=open(path,{now:()=>now});
+  for(const delta of [-1,0,1]){
+    const job=store.createJob({...makeInput(),artifacts:{videoPath:'previous.mp4'}});const deadline=now+1000;store.updateJob(job.id,{expiresAt:new Date(deadline).toISOString()});store.claimNextJob('worker');now=deadline+delta;
+    const options={workerId:'worker',expectedStatuses:['running'],requireUnexpired:true,requireNotCancelled:true};
+    if(delta<0)assert.equal(store.updateJob(job.id,{status:'completed'},options).status,'completed');
+    else {const before=store.getJobInternal(job.id);assert.throws(()=>store.updateJob(job.id,{status:'completed',artifacts:{videoPath:'replacement.mp4'}},options),{code:'JOB_EXPIRED'});assert.deepEqual(store.getJobInternal(job.id),before);store.updateJob(job.id,{status:'expired'});}
+  }
+  const job=store.createJob(makeInput());store.claimNextJob('worker');assert.throws(()=>store.updateJob(job.id,{status:'completed'},{workerId:'other',expectedStatuses:['running'],requireUnexpired:true,requireNotCancelled:true}),{code:'WORKER_LEASE_LOST'});
+  store.updateJob(job.id,{status:'cancelled'});assert.throws(()=>store.updateJob(job.id,{status:'completed'},{workerId:'worker',expectedStatuses:['running'],requireUnexpired:true,requireNotCancelled:true}),{code:'JOB_STATE_CONFLICT'});
+});
