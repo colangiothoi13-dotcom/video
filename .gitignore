@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.data/
+.tools/
+.env*
+.npm-cache/
+.cache/
+coverage/
+*.log
