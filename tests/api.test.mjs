@@ -12,13 +12,15 @@ import {createApi} from '../lib/api.mjs';
 
 const toolStatus={ffmpeg:{available:true,subtitles:true},ffprobe:{available:true},ytdlp:{available:false},font:{available:true}};
 async function fixture(t, options={}) {
-  const dataDir=await mkdtemp(path.join(tmpdir(),'vietsub-api-'));
+  const fixtureRoot=await mkdtemp(path.join(tmpdir(),'vietsub-api-'));
+  const dataDir=options.hiddenRoot?path.join(fixtureRoot,'.data'):fixtureRoot;
+  await mkdir(dataDir,{recursive:true});
   const store=createStore(path.join(dataDir,'jobs.sqlite'));
   let probes=0;
   const app=express();app.use('/api',createApi({store,dataDir,config:{env:{},...options.config},tools:{getToolStatus:async()=>{probes++;return toolStatus;},...options.tools}}));
   const server=createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
-  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));store.close();await rm(dataDir,{recursive:true,force:true});});
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));store.close();await rm(fixtureRoot,{recursive:true,force:true});});
   const call=(route,init={})=>fetch(base+'/api'+route,{...init,headers:{...(init.body && !(init.body instanceof FormData)?{'content-type':'application/json'}:{}),...init.headers}});
   const seed=()=>store.createJob({title:'Video kiểm thử',sourceType:'upload'});
   return {dataDir,store,base,call,seed,probes:()=>probes};
@@ -96,6 +98,20 @@ test('source served after upload handoff has inert video MIME, including mislead
   f.store.updateJob(job.id,{artifacts:{inputPath:source},upload:{originalName:'film.mp4'}});
   let response=await f.call(`/jobs/${job.id}/files/source`);assert.equal(response.headers.get('content-type'),'video/mp4');assert.equal(await response.text(),'source-video');
   f.store.updateJob(job.id,{upload:{originalName:'exploit.html'}});response=await f.call(`/jobs/${job.id}/files/source`);assert.ok(!response.headers.get('content-type').includes('text/html'));
+});
+test('hidden data ancestor serves allowlisted artifacts and ranges without crossing job or expiry boundaries',async t=>{
+  const f=await fixture(t,{hiddenRoot:true});const id=await withCues(f);const directory=path.join(f.dataDir,'jobs',id);await mkdir(directory,{recursive:true});
+  const artifacts={inputPath:path.join(directory,'input.bin'),videoPath:path.join(directory,'video.mp4'),posterPath:path.join(directory,'poster.jpg')};
+  for(const file of Object.values(artifacts))await writeFile(file,'0123456789');
+  f.store.updateJob(id,{artifacts,renderedVersion:1,upload:{originalName:'film.mp4'}});
+  for(const [kind,type] of [['source','video/mp4'],['video','video/mp4'],['poster','image/jpeg']]){
+    const response=await f.call(`/jobs/${id}/files/${kind}`);assert.equal(response.status,200,kind);assert.equal(response.headers.get('content-type'),type);assert.equal(await response.text(),'0123456789');
+    if(kind!=='poster'){const range=await f.call(`/jobs/${id}/files/${kind}`,{headers:{range:'bytes=2-5'}});assert.equal(range.status,206);assert.equal(range.headers.get('content-range'),'bytes 2-5/10');assert.equal(await range.text(),'2345');}
+  }
+  const other=await withCues(f);const otherDirectory=path.join(f.dataDir,'jobs',other);await mkdir(otherDirectory);const outside=path.join(otherDirectory,'video.mp4');await writeFile(outside,'private other job');
+  for(const [kind,field] of [['source','inputPath'],['video','videoPath'],['poster','posterPath']]){f.store.updateJob(id,{artifacts:{[field]:outside}});assert.equal((await f.call(`/jobs/${id}/files/${kind}`)).status,404,kind);}
+  f.store.updateJob(id,{artifacts,status:'expired'});
+  for(const kind of ['source','video','poster','srt'])assert.equal((await f.call(`/jobs/${id}/files/${kind}`)).status,410,kind);
 });
 test('cancel queued immediately; running waits for worker; retry/render retain checkpoints and expiry',async t=>{
   const f=await fixture(t);const queued=f.seed();let response=await f.call(`/jobs/${queued.id}/cancel`,{method:'POST'});assert.equal((await response.json()).job.status,'cancelled');

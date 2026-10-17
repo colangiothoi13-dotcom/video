@@ -190,10 +190,21 @@ for(const rerender of [false,true])test(`accepted cancellation wins atomic ${rer
 for(const delta of [-1,0,1])test(`re-render publication checks the original deadline at offset ${delta}ms`,async t=>{
   const f=await setup(t);const job=await f.job();f.store.claimNextJob('worker-a');await f.pipeline.runJob(job.id);const before=f.store.getJobInternal(job.id);const deadline=Date.parse(before.expiresAt);
   f.store.saveCues(job.id,1,f.store.getCues(job.id).map(cue=>({...cue,text:'Bản mới'})));f.store.releaseWorker('worker-a');f.setNow(deadline-2);f.store.updateJob(job.id,{status:'queued',renderRequested:true});f.store.claimNextJob('worker-a');
-  const directory=path.join(f.dir,'jobs',job.id);const filesBefore=(await readdir(directory)).sort();let reachedPublication=false;
+  const directory=path.join(f.dir,'jobs',job.id);let reachedPublication=false;
   const racingStore=new Proxy(f.store,{get(target,key){if(key==='updateJob')return (id,patch,options)=>{if(patch.status==='completed'){reachedPublication=true;f.setNow(deadline+delta);}return target.updateJob(id,patch,options);};return target[key];}});
   const pipeline=createPipeline({store:racingStore,tools:f.tools,ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await pipeline.runJob(job.id);
   const after=f.store.getJobInternal(job.id);assert.equal(reachedPublication,true);assert.equal(after.expiresAt,before.expiresAt);
   if(delta<0){assert.equal(after.status,'completed');assert.equal(after.renderedVersion,2);assert.notEqual(after.artifacts.videoPath,before.artifacts.videoPath);}
-  else {assert.equal(after.status,'expired');assert.equal(after.error,null);assert.equal(after.renderedVersion,1);assert.equal(after.artifacts.videoPath,before.artifacts.videoPath);assert.equal(after.artifacts.srtPath,before.artifacts.srtPath);assert.equal(await readFile(before.artifacts.videoPath,'utf8'),'mp4-1');assert.deepEqual((await readdir(directory)).sort(),filesBefore);}
+  else {assert.equal(after.status,'expired');assert.equal(after.error,null);assert.equal(after.renderedVersion,1);assert.equal(after.artifacts.videoPath,before.artifacts.videoPath);assert.equal(after.artifacts.srtPath,before.artifacts.srtPath);await assert.rejects(stat(directory),{code:'ENOENT'});}
+});
+
+test('expiry during render retains prior artifacts while busy and removes them immediately after media settles',async t=>{
+  const f=await setup(t);const job=await f.job();f.store.claimNextJob('worker-a');await f.pipeline.runJob(job.id);const before=f.store.getJobInternal(job.id);
+  f.store.updateJob(job.id,{status:'queued',renderRequested:true});f.store.claimNextJob('worker-a');
+  let entered=false,release;const gate=new Promise(resolve=>release=resolve);const directory=path.join(f.dir,'jobs',job.id);
+  const pipeline=createPipeline({store:f.store,dataDir:f.dir,workerId:'worker-a',ai:f.ai,config:f.config,tools:{...f.tools,renderVideo:async({outputPath})=>{entered=true;await gate;await writeFile(outputPath,'new mp4');}}});
+  const running=pipeline.runJob(job.id);await until(()=>entered);
+  // The API/cleanup can mark expiry, but the active media step still owns its files.
+  f.store.updateJob(job.id,{status:'expired'});assert.deepEqual(await pipeline.cleanupExpired(),[]);assert.equal(await readFile(before.artifacts.videoPath,'utf8'),'mp4-1');
+  release();await running;assert.equal(f.store.getJob(job.id).status,'expired');await assert.rejects(stat(directory),{code:'ENOENT'});
 });

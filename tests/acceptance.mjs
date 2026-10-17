@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import * as client from '../lib/client.js';
 import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request, jobProgress, isJobExpired, createNavigationGuard, refreshHealthState } from '../lib/client.js';
 
 // Browser acceptance, run with a real API/key and spoken source before release:
@@ -17,6 +18,20 @@ import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request
 // 7. User-approved duration cap is 25 minutes / 1500 seconds: verify a spoken
 //    source at the boundary is accepted and >1500 seconds is rejected by probe.
 //    No API key is presently configured; paid upload/URL E2E remains unverified.
+
+test('unsupported source switches after polling completes and reloads every rendered version without duplicate captions',()=>{
+  assert.equal(typeof client.previewMedia,'function','preview resource must follow current job and source failure');
+  const job={status:'running',renderedVersion:0};
+  const initial=client.previewMedia('job 1',job,false);
+  assert.deepEqual(initial,{rendered:false,src:'/api/jobs/job%201/files/source',key:'/api/jobs/job%201/files/source',showCaptions:true});
+  const failed=client.previewMedia('job 1',job,true);assert.equal(failed.src,initial.src);assert.equal(failed.rendered,false);
+  const completed=client.previewMedia('job 1',{status:'completed',renderedVersion:1},true);
+  assert.deepEqual(completed,{rendered:true,src:'/api/jobs/job%201/files/video?v=1',key:'/api/jobs/job%201/files/video?v=1',showCaptions:false});
+  const rerendered=client.previewMedia('job 1',{status:'completed',renderedVersion:2},true);
+  assert.equal(rerendered.src,'/api/jobs/job%201/files/video?v=2');assert.equal(rerendered.key,'/api/jobs/job%201/files/video?v=2');assert.equal(rerendered.showCaptions,false);
+  assert.notEqual(rerendered.src,completed.src);assert.notEqual(rerendered.key,completed.key);
+  assert.equal(client.previewMedia('job 1',{renderedVersion:2},false).showCaptions,true,'playable source still previews unsaved edits');
+});
 
 test('reload route retains the selected job and rejects unknown screens', () => {
   assert.deepEqual(readRoute('#job/abc%20def'), { screen: 'job', jobId: 'abc def' });
