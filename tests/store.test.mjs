@@ -228,3 +228,56 @@ test('reading speed counts emoji graphemes consistently with subtitle normalizat
   assert.equal(store.saveCues(job.id, 1, [{ id: 'c1', text: family.repeat(23) }]).cues[0].readingWarning, true);
   assert.equal(store.saveCues(job.id, 2, [{ id: 'c1', text: '12345678901 12345678901' }]).cues[0].readingWarning, true);
 });
+
+test('cancellation checks current state after a worker claims a previously queued job', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let now = Date.parse('2026-10-17T00:00:00Z');
+  const api = open(path, { now: () => now });
+  const worker = open(path, { now: () => now });
+  const job = api.createJob(makeInput());
+  assert.equal(api.getJob(job.id).status, 'queued');
+  worker.claimNextJob('worker');
+  const cancelled = api.requestCancellation(job.id);
+  assert.equal(cancelled.status, 'running');
+  assert.equal(cancelled.expiresAt, null);
+  assert.equal(worker.getJobInternal(job.id).cancelRequested, true);
+  const queued = api.createJob(makeInput());
+  const immediate = api.requestCancellation(queued.id);
+  assert.equal(immediate.status, 'cancelled');
+  assert.equal(api.getJobInternal(queued.id).cancelRequested, true);
+  assert.equal(Date.parse(immediate.expiresAt) - Date.parse(immediate.updatedAt), 86_400_000);
+  now += 1000;
+  assert.deepEqual(api.requestCancellation(queued.id), immediate, 'terminal cancellation is unchanged');
+});
+
+test('a stale requeue request cannot replace a state already claimed by a worker', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  const api = open(path);
+  const worker = open(path);
+  const job = api.createJob(makeInput());
+  api.updateJob(job.id, { status: 'failed' });
+  assert.equal(api.getJob(job.id).status, 'failed');
+  api.updateJob(job.id, { status: 'queued' }, { expectedStatuses: ['failed', 'cancelled'], requireUnexpired: true });
+  worker.claimNextJob('worker');
+  const before = api.getJobInternal(job.id);
+  assert.throws(() => api.updateJob(job.id, { status: 'queued', cancelRequested: false }, { expectedStatuses: ['completed', 'failed', 'cancelled'], requireUnexpired: true }), { code: 'JOB_STATE_CONFLICT' });
+  assert.deepEqual(api.getJobInternal(job.id), before);
+});
+
+test('expired cancellation and guarded updates reject without mutating the job', async t => {
+  const { createStore } = await import(storeModule);
+  const { path, open } = fixture(t, createStore);
+  let now = Date.parse('2026-10-17T00:00:00Z');
+  const store = open(path, { now: () => now });
+  for (const expiresByStatus of [false, true]) {
+    const job = store.createJob(makeInput());
+    store.updateJob(job.id, expiresByStatus ? { status: 'expired' } : { status: 'failed' });
+    now += 86_400_000;
+    const before = store.getJobInternal(job.id);
+    assert.throws(() => store.requestCancellation(job.id), { code: 'JOB_EXPIRED' });
+    assert.throws(() => store.updateJob(job.id, { status: 'queued' }, { expectedStatuses: ['failed', 'cancelled'], requireUnexpired: true }), { code: 'JOB_EXPIRED' });
+    assert.deepEqual(store.getJobInternal(job.id), before);
+  }
+});
