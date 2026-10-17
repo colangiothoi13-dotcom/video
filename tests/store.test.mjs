@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -115,11 +115,25 @@ test('job ordering, filtering and retention preserve the first successful expiry
 test('configuration persists server secrets while public status never returns the key', async t => {
   const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
   const { dir } = fixture(t);
-  assert.deepEqual(getConfigStatus({ dataDir: dir }), { configured: false, translationModel: 'gpt-5.6-terra' });
-  const status = writeConfig({ apiKey: 'sk-secret-unit-test', translationModel: 'gpt-example' }, { dataDir: dir });
+  const options = { dataDir: dir, env: {} };
+  assert.deepEqual(getConfigStatus(options), { configured: false, translationModel: 'gpt-5.6-terra' });
+  const status = writeConfig({ apiKey: 'sk-secret-unit-test', translationModel: 'gpt-example' }, options);
   assert.deepEqual(status, { configured: true, translationModel: 'gpt-example' });
-  assert.equal(readConfig({ dataDir: dir }).apiKey, 'sk-secret-unit-test');
-  writeConfig({ translationModel: 'gpt-second' }, { dataDir: dir });
-  assert.equal(readConfig({ dataDir: dir }).apiKey, 'sk-secret-unit-test');
-  assert.equal(JSON.stringify(getConfigStatus({ dataDir: dir })).includes('secret'), false);
+  assert.equal(readConfig(options).apiKey, 'sk-secret-unit-test');
+  writeConfig({ translationModel: 'gpt-second' }, options);
+  assert.equal(readConfig(options).apiKey, 'sk-secret-unit-test');
+  assert.equal(JSON.stringify(getConfigStatus(options)).includes('secret'), false);
+});
+
+test('environment credentials override settings without being copied into saved configuration', async t => {
+  const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
+  const { dir } = fixture(t);
+  const options = { dataDir: dir, env: { OPENAI_API_KEY: 'sk-environment-only', OPENAI_TRANSLATION_MODEL: 'gpt-environment' } };
+  writeConfig({ translationModel: 'gpt-saved' }, options);
+  assert.deepEqual(readConfig(options), { apiKey: 'sk-environment-only', translationModel: 'gpt-environment' });
+  assert.deepEqual(getConfigStatus(options), { configured: true, translationModel: 'gpt-environment' });
+  assert.equal(readFileSync(join(dir, 'config.json'), 'utf8').includes('sk-environment-only'), false);
+  writeConfig({ apiKey: 'sk-saved' }, options);
+  assert.deepEqual(readConfig({ dataDir: dir, env: {} }), { apiKey: 'sk-saved', translationModel: 'gpt-saved' });
+  assert.equal(readConfig(options).apiKey, 'sk-environment-only');
 });
