@@ -18,10 +18,18 @@ test('invalid media is rejected before AI: no audio, too long, too large, no vid
   assert.equal(typeof media.validateVideoMetadata,'function','media validation must exist');
   const good={duration:3,width:320,height:240,hasAudio:true};
   assert.throws(()=>media.validateVideoMetadata({...good,hasAudio:false}),/âm thanh/i);
-  assert.throws(()=>media.validateVideoMetadata({...good,duration:600.001}),/600/);
+  assert.throws(()=>media.validateVideoMetadata({...good,duration:1500.001}),/1500/);
   assert.throws(()=>media.validateVideoMetadata(good,500000001),/500/);
   assert.throws(()=>media.validateVideoMetadata({...good,width:0}),/video/i);
-  assert.doesNotThrow(()=>media.validateVideoMetadata({...good,duration:600},500000000));
+  assert.doesNotThrow(()=>media.validateVideoMetadata({...good,duration:1500},500000000));
+});
+
+test('25-minute cap accepts the requested 1435-second video and the exact boundary before AI',()=>{
+  for(const duration of [1435,1500]) {
+    const metadata={duration,width:1280,height:720,hasAudio:true};
+    assert.equal(media.validateVideoMetadata(metadata).duration,duration);
+  }
+  assert.throws(()=>media.validateVideoMetadata({duration:1500.001,width:1280,height:720,hasAudio:true}),error=>error.code==='VIDEO_TOO_LONG');
 });
 
 test('process wrapper uses argument arrays literally and aborts active subprocesses',{timeout:10000},async()=>{
@@ -127,8 +135,13 @@ test('real ffmpeg renders Unicode captions at accented paths and extracts small 
     const silent=path.join(dir,'không tiếng.mp4');
     await processTools.runProcess(ffmpeg,['-hide_banner','-loglevel','error','-i',input,'-an','-c:v','copy','-y',silent]);
     await assert.rejects(media.probeVideo(silent),/âm thanh/i);
+    const requestedLength=path.join(dir,'video 1435 giây.mp4');
+    await processTools.runProcess(ffmpeg,['-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t','1435','-c','copy','-y',requestedLength]);
+    const requestedProbe=await media.probeVideo(requestedLength);
+    // Stream-copying B-frames/AAC can carry subsecond DTS/edit-list padding.
+    assert.ok(requestedProbe.hasAudio && Math.abs(requestedProbe.duration-1435)<1,`real approximately 1435-second video must be accepted before AI (actual ${requestedProbe.duration})`);
     const long=path.join(dir,'quá dài.mp4');
-    await processTools.runProcess(ffmpeg,['-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t','601','-c','copy','-y',long]);
-    await assert.rejects(media.probeVideo(long),/600/);
+    await processTools.runProcess(ffmpeg,['-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t','1501','-c','copy','-y',long]);
+    await assert.rejects(media.probeVideo(long),/1500/);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
