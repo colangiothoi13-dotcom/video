@@ -189,3 +189,24 @@ test('public usage maps only measured Gemini token fields',async t=>{
   const options=await fixture(t,(_,res)=>send(res,200,{...response([{id:'s1',text:'A'},{id:'s2',text:'B'}]),usage:{total_input_tokens:20,total_output_tokens:10,total_tokens:30,total_cached_tokens:5,total_thought_tokens:2,input_tokens_by_modality:[{modality:'audio',tokens:11},{modality:'text',tokens:9},{modality:'diagnostic',tokens:9}],diagnostic:'private-fixture-key'}}));
   const {usage}=await translateSegments(segments,options);assert.equal(usage.total_tokens,30);assert.deepEqual(usage.input_tokens_details,{cached_tokens:5,audio_tokens:11,text_tokens:9});assert.deepEqual(usage.output_tokens_details,{reasoning_tokens:2});assert.doesNotMatch(JSON.stringify(usage),/private-fixture-key|diagnostic/);
 });
+
+for(const [operation,requested,resolved] of [['transcription','gemini-3.5-transcribe','gemini-3.5-transcribe-001'],['translation','gemini-3.5-flash-lite','gemini-3.5-flash-lite-001']]) {
+  for(const [label,returned,useResolved] of [['resolved',resolved,true],['absent',undefined,false],['empty','',false],['unsafe string','private-fixture-key https://attacker.invalid/model',false],['object',{diagnostic:'private-fixture-key'},false]]) {
+    test(`${operation} usage handles ${label} provider model metadata without changing the requested model`,async t=>{
+      let result;
+      if(operation==='transcription') {
+        const audio=await audioFile(t);const {options}=await asrFixture(t,{result:{...interaction('Hello.',[word('Hello.','0.1s','0.8s')]),model:returned}});
+        result=await transcribe(audio,{...options,duration:2,model:requested});
+      } else {
+        const options=await fixture(t,(req,res,body)=>{
+          assert.equal(req.url,'/v1beta/interactions');assert.equal(JSON.parse(body).model,'gemini-3.5-flash-lite');
+          send(res,200,{...response([{id:'s1',text:'A'},{id:'s2',text:'B'}]),model:returned});
+        });
+        result=await translateSegments(segments,{...options,model:requested});
+      }
+      assert.equal(result.usage.model,useResolved?resolved:requested);assert.equal(result.usage.provider,'gemini');
+      assert.equal(result.usage.input_tokens,20);assert.equal(result.usage.output_tokens,10);assert.equal(result.usage.total_tokens,30);assert.equal(result.usage.attempts,1);
+      assert.doesNotMatch(JSON.stringify(result.usage),/private-fixture-key|attacker.invalid|diagnostic/);
+    });
+  }
+}
