@@ -27,7 +27,7 @@ async function audioFile(t,contents='fixture audio') {
   const dir=await mkdtemp(path.join(tmpdir(),'vietsub-gemini-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   const audio=path.join(dir,'giọng nói.mp3');await writeFile(audio,contents);return audio;
 }
-async function asrFixture(t,{result=interaction('Xin chào.',[word('Xin','0.100s','0.300s'),word('chào.','0.400s','0.850s')]),state='ACTIVE',onRequest,metadata,uploadUrl}={}) {
+async function asrFixture(t,{result=interaction('Xin chào.',[word('Xin','0.100s','0.300s'),word('chào.','0.400s','0.850s')]),state='ACTIVE',onRequest,metadata,uploadUrl,diarization=false}={}) {
   const calls=[];let options;
   options=await fixture(t,async(req,res,body)=>{
     calls.push(`${req.method} ${req.url}`);assert.equal(req.headers.authorization,undefined);assert.equal(req.headers['x-goog-api-key'],'private-fixture-key');
@@ -48,7 +48,7 @@ async function asrFixture(t,{result=interaction('Xin chào.',[word('Xin','0.100s
     assert.equal(req.url,'/v1beta/interactions');assert.equal(req.method,'POST');
     const data=JSON.parse(body);assert.equal(data.model,'gemini-3.5-transcribe');assert.equal(data.store,false);
     assert.deepEqual(data.input,[{type:'audio',uri:file.uri,mime_type:'audio/mp3'}]);
-    assert.deepEqual(data.generation_config,{transcription_config:{mode:{type:'verbatim',timestamp_granularities:['word']}}});
+    assert.deepEqual(data.generation_config,{transcription_config:{mode:{type:'verbatim',timestamp_granularities:['word'],...(diarization?{diarization_mode:'speaker'}:{})}}});
     send(res,200,result);
   });
   return {options,calls};
@@ -103,6 +103,13 @@ test('transcription uploads bytes, polls processing, uses real word offsets and 
   assert.deepEqual(result.segments,[{id:'s1',sourceId:'s1',start:0.1,end:0.85,text:'Xin chào.'}]);assert.equal(result.usage.audioSeconds,2);assert.equal(result.usage.total_tokens,30);assert.equal(result.usage.provider,'gemini');assert.equal(result.usage.model,'gemini-3.5-transcribe');
   assert.deepEqual(calls,['POST /upload/v1beta/files','POST /upload/session','GET /v1beta/files/fixture-audio','POST /v1beta/interactions','DELETE /v1beta/files/fixture-audio']);
 });
+test('opt-in speaker analysis requests diarization and retains labels without changing default transcripts',async t=>{
+  const audio=await audioFile(t),words=[word('Hello.','0s','0.9s',{speaker:'spk_1'}),word('World.','1s','1.9s',{speaker:'spk_2'})];
+  const {options}=await asrFixture(t,{diarization:true,result:interaction('Hello. World.',words)});
+  const result=await transcribe(audio,{...options,duration:2,diarization:true});
+  assert.deepEqual(result.segments.map(s=>s.speaker),['spk_1','spk_2']);
+});
+
 test('subtitle grouping respects punctuation, pauses and speaker turns, retaining exact first and last offsets',async t=>{
   const audio=await audioFile(t);const words=[word('Hello,','0.100s','0.350s'),word('世界!','0.400s','0.800s'),word('Xin','1.500s','1.700s'),word('chào','1.800s','2.000s'),word('bạn','2.100s','2.300s',{speaker:'spk_2'})];
   const {options}=await asrFixture(t,{result:interaction('Hello, 世界! Xin chào bạn',words)});

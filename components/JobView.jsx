@@ -1,11 +1,13 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icons';
+import DubbingPanel from './DubbingPanel';
 import { fileUrl, formatDate, formatTime, isJobExpired, jobProgress, languageLabels, mergeDraft, previewMedia, request, stageLabels, statusLabels } from '../lib/client';
 
 export default function JobView({ jobId, onNavigate, onChanged, registerDirty }) {
   const [data, setData] = useState(null); const [error, setError] = useState(''); const [responseStatus, setResponseStatus] = useState(null); const [busy, setBusy] = useState('');
   const [changes, setChanges] = useState({}); const changesRef = useRef({}); const [baseVersion, setBaseVersion] = useState(null);
+  const [dubbingDirty, setDubbingDirty] = useState(false);
   const [sourceFailed, setSourceFailed] = useState(false); const [currentTime, setCurrentTime] = useState(0); const [failedPreviewKey, setFailedPreviewKey] = useState(null); const [message, setMessage] = useState('');
   const videoRef = useRef(null); const alive = useRef(true); const loadSequence = useRef(0); const statusRef = useRef('queued'); const dirty = Object.keys(changes).length > 0;
   const job = data?.job; const cues = data?.cues || []; const draft = mergeDraft(cues, changes);
@@ -14,7 +16,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
   const conflict = dirty && baseVersion !== job?.subtitleVersion;
   const stale = job && job.subtitleVersion > job.renderedVersion;
   useEffect(() => { setCurrentTime(0); }, [preview.key]);
-  useEffect(() => { registerDirty(dirty); return () => registerDirty(false); }, [dirty, registerDirty]);
+  useEffect(() => { registerDirty(dirty || dubbingDirty); return () => registerDirty(false); }, [dirty, dubbingDirty, registerDirty]);
   async function load({ reset = false } = {}) {
     const sequence = ++loadSequence.current;
     try {
@@ -29,7 +31,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
     } catch (e) { if (alive.current && sequence === loadSequence.current) { setError(e.message); setResponseStatus(e.status || null); } }
   }
   useEffect(() => {
-    alive.current = true; setData(null); changesRef.current = {}; setChanges({}); setFailedPreviewKey(null); setSourceFailed(false); setError(''); setResponseStatus(null);
+    alive.current = true; setData(null); changesRef.current = {}; setChanges({}); setDubbingDirty(false); setFailedPreviewKey(null); setSourceFailed(false); setError(''); setResponseStatus(null);
     load(); let timer;
     const tick = async () => { if (!document.hidden) await load(); if (alive.current) timer = setTimeout(tick, document.hidden ? 10000 : ['queued', 'running'].includes(statusRef.current) ? 2000 : 15000); };
     timer = setTimeout(tick, 2000);
@@ -37,7 +39,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
     document.addEventListener('visibilitychange', onVisible);
     return () => { alive.current = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [jobId]);
-  useEffect(() => { const protect = event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', protect); return () => window.removeEventListener('beforeunload', protect); }, [dirty]);
+  useEffect(() => { const protect = event => { if (dirty || dubbingDirty) { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', protect); return () => window.removeEventListener('beforeunload', protect); }, [dirty, dubbingDirty]);
   function edit(cue, text) {
     const next = { ...changesRef.current }; if (text === cue.text) delete next[cue.id]; else next[cue.id] = text;
     changesRef.current = next; setChanges(next); setMessage('');
@@ -80,6 +82,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
       {conflict && <div className="notice warning"><Icon name="warning" /><span>Máy chủ có phiên bản mới. Bản sửa chưa lưu vẫn được giữ trên màn hình này.</span><button className="text-button" onClick={() => { if (window.confirm('Nạp bản đã lưu trên máy chủ? Các chỉnh sửa chưa lưu sẽ bị thay thế.')) load({ reset: true }); }}>Nạp bản máy chủ</button></div>}
       {(stale || dirty) && <div className="notice warning"><Icon name="info" /><span>{dirty ? 'Phụ đề đang sửa chưa được lưu. Hãy lưu trước khi tải SRT hoặc xuất lại MP4.' : 'MP4 đang dùng phiên bản phụ đề cũ. Xuất lại để đưa các chỉnh sửa mới vào video.'}</span></div>}
       <div className="editor-action-bar"><div><span className={`save-dot ${dirty ? 'unsaved' : ''}`} /><span>{dirty ? `${Object.keys(changes).length} đoạn chưa lưu` : `Phụ đề v${job.subtitleVersion} đã lưu`}</span></div><div className="editor-actions"><button className="button secondary" disabled={!dirty || !!busy || running || conflict} onClick={() => action('save')}><Icon name={busy === 'save' ? 'loader' : 'save'} className={busy === 'save' ? 'spin' : ''} size={17} />{busy === 'save' ? 'Đang lưu…' : 'Lưu phụ đề'}</button><a className={`button secondary ${dirty ? 'disabled' : ''}`} href={dirty ? undefined : fileUrl(jobId, 'srt')} download aria-disabled={dirty} tabIndex={dirty ? -1 : 0}><Icon name="arrowDown" size={17} />SRT</a><button className="button secondary" disabled={dirty || !!busy || running} onClick={() => action('render')}><Icon name={busy === 'render' ? 'loader' : 'refresh'} className={busy === 'render' ? 'spin' : ''} size={17} />Xuất lại</button>{job.renderedVersion > 0 && <a className="button primary" href={fileUrl(jobId, 'video')} download><Icon name="arrowDown" size={17} />{stale ? 'MP4 bản cũ' : 'Tải MP4'}</a>}</div></div>
+      <DubbingPanel key={jobId} job={job} cues={cues} subtitleDirty={dirty} busy={!!busy || running} onSeek={seek} onChanged={async () => { await load(); await onChanged(); }} onDirtyChange={setDubbingDirty} />
     </>}
     {!cues.length && !running && !expired && <div className="panel empty-state"><Icon name="subtitles" size={36} /><h2>Chưa có phụ đề để biên tập</h2><p>Kết quả sẽ xuất hiện sau khi video được nhận dạng và dịch thành công.</p></div>}
   </>;
