@@ -16,6 +16,7 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
   const actions = dubbingActionState(profile, { dirty, subtitleDirty, subtitleVersion: job.subtitleVersion, busy: busy || Boolean(pending), expired, conflict, configured: snapshot?.configured ?? false });
   const assignments = new Map((profile?.assignments || []).map(item => [item.cueId, item]));
   const uncertainCount = profile?.assignments.filter(item => item.uncertain).length || 0;
+  const hasSavedProfile = profile?.version > 0;
   const output = job.dubbingOutput ?? snapshot?.output; const preview = job.dubbingPreview ?? snapshot?.preview;
   const outputState = dubbingMediaState(output, remote || profile, job.subtitleVersion, { dirty, subtitleDirty });
   const previewState = dubbingMediaState(preview, remote || profile, job.subtitleVersion, { dirty, subtitleDirty });
@@ -72,7 +73,7 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
         if (alive.current) setMessage('Đã lưu phân vai và giọng. Bạn có thể nghe thử từng vai hoặc xuất video.');
       } else {
         await request(`${root}/${kind}`, { method: 'POST', body: { version: profile.version, subtitleVersion: job.subtitleVersion, ...(kind === 'preview' ? { speakerId } : {}) } });
-        if (alive.current) setMessage(kind === 'analyze' ? 'Đã xếp hàng phân vai từ tiếng nói. Hãy kiểm tra và sửa gợi ý khi hoàn tất.' : kind === 'preview' ? 'Đã xếp hàng tạo câu nghe thử. Âm thanh sẽ xuất hiện bên dưới khi hoàn tất.' : 'Đã xếp hàng xuất MP4 lồng tiếng. Kết quả sẽ xuất hiện bên dưới khi hoàn tất.');
+        if (alive.current) setMessage(kind === 'analyze' ? 'Đã xếp hàng phân vai từ tiếng nói. Web sẽ tự lưu kết quả để nghe thử hoặc xuất khi hoàn tất.' : kind === 'preview' ? 'Đã xếp hàng tạo câu nghe thử. Âm thanh sẽ xuất hiện bên dưới khi hoàn tất.' : 'Đã xếp hàng xuất MP4 lồng tiếng. Kết quả sẽ xuất hiện bên dưới khi hoàn tất.');
       }
       if (alive.current) await onChanged();
     } catch (cause) {
@@ -88,7 +89,7 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
   }
 
   return <section className="panel dubbing-panel" aria-labelledby="dubbing-title">
-    <div className="dubbing-heading"><div><div className="eyebrow">GIỌNG VIỆT THEO NHÂN VẬT</div><h2 id="dubbing-title"><Icon name="audio" size={23} />Lồng tiếng</h2><p>Chọn giọng cho từng vai, kiểm tra câu thoại rồi xuất video lồng tiếng.</p></div><span className={`edit-state ${dirty || subtitleStale ? 'unsaved' : ''}`}>{dirty ? 'Chưa lưu' : subtitleStale ? 'Cần lưu lại' : profile?.version > 0 ? `Đã lưu · v${profile.version}` : 'Chưa lưu cấu hình'}</span></div>
+    <div className="dubbing-heading"><div><div className="eyebrow">GIỌNG VIỆT THEO NHÂN VẬT</div><h2 id="dubbing-title"><Icon name="audio" size={23} />Lồng tiếng</h2><p>{hasSavedProfile ? 'Nghe thử hoặc xuất video với phân vai đã lưu. Bạn có thể đổi vai và giọng nếu muốn.' : 'Video mới dùng Gemini tự phân vai khi dịch xong. Video cũ có thể nhận diện bằng Phân vai tự động.'}</p></div><span className={`edit-state ${dirty || subtitleStale ? 'unsaved' : ''}`}>{dirty ? 'Chưa lưu' : subtitleStale ? 'Cần lưu lại' : hasSavedProfile ? `Đã lưu · v${profile.version}` : 'Vai tạm · chưa nhận diện'}</span></div>
     <p className="dubbing-description">Âm thanh gốc giảm khi có lời Việt và giữ trong khoảng trống. Nhạc, hiệu ứng và lời gốc đều giảm cùng nhau.</p>
     {error && <div className="notice error" role="alert"><Icon name="warning" /><span>{error}</span><button className="text-button" disabled={Boolean(pending)} onClick={() => load()}>Tải lại trạng thái</button></div>}
     {message && <div className="notice success" role="status"><Icon name="checkCircle" /><span>{message}</span></div>}
@@ -110,14 +111,15 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
           <p className="dubbing-speaker-help">{cue ? `Câu đầu tiên · ${formatTime(cue.start)}` : 'Chưa có câu để nghe thử.'}{assigned > 0 && ' Gán lại các câu trước khi xóa vai.'}</p>
         </div>;
       })}</div>
-      <div className="dubbing-section-heading"><h3>Gán vai cho câu thoại <span>{cues.length} câu</span></h3>{uncertainCount > 0 && <span className="dubbing-uncertain">{uncertainCount} câu cần kiểm tra</span>}</div>
-      <p className="dubbing-cue-help">Nhấn thời gian để xem video. Chọn vai hoặc xác nhận sau khi kiểm tra các câu được đánh dấu.</p>
+      <div className="dubbing-section-heading"><h3>Vai đọc cho câu thoại <span>{cues.length} câu</span></h3>{hasSavedProfile && uncertainCount > 0 && <span className="dubbing-uncertain">{uncertainCount} câu có thể chỉnh lại</span>}</div>
+      <p className="dubbing-cue-help">{hasSavedProfile ? 'Web dùng phân vai đã lưu khi lồng tiếng. Bạn có thể đổi vai nếu muốn; không cần xác nhận từng câu. Nhấn thời gian để xem đoạn video.' : 'Chưa nhận diện người nói cho video này. Các vai dưới đây là vai tạm; chọn Phân vai tự động để web gán vai. Nhấn thời gian để xem đoạn video.'}</p>
       <div className="dubbing-cues">{cues.map((cue, index) => {
         const assignment = assignments.get(cue.id);
-        return <div className={`dubbing-cue ${assignment?.uncertain ? 'dubbing-cue-uncertain' : ''}`} key={cue.id}>
-          <div className="dubbing-cue-top"><span className="cue-number">{String(index + 1).padStart(2, '0')}</span><button className="cue-time" onClick={() => onSeek(cue)} aria-label={`Xem câu ${index + 1}, ${formatTime(cue.start)}`}><Icon name="play" size={11} />{formatTime(cue.start)} → {formatTime(cue.end)}</button>{assignment?.uncertain && <span className="dubbing-uncertain">Cần kiểm tra vai</span>}</div>
+        const uncertain = hasSavedProfile && assignment?.uncertain;
+        return <div className={`dubbing-cue ${uncertain ? 'dubbing-cue-uncertain' : ''}`} key={cue.id}>
+          <div className="dubbing-cue-top"><span className="cue-number">{String(index + 1).padStart(2, '0')}</span><button className="cue-time" onClick={() => onSeek(cue)} aria-label={`Xem câu ${index + 1}, ${formatTime(cue.start)}`}><Icon name="play" size={11} />{formatTime(cue.start)} → {formatTime(cue.end)}</button>{uncertain && <span className="dubbing-uncertain">AI chưa chắc</span>}</div>
           <p className="cue-original" lang="auto">{cue.original}</p><p className="dubbing-cue-text">{cue.text}</p>
-          <div className="dubbing-assignment"><label htmlFor={`dubbing-cue-${cue.id}`}>Vai đọc</label><select id={`dubbing-cue-${cue.id}`} value={assignment?.speakerId || ''} disabled={locked} onChange={event => edit(current => setDubbingAssignment(current, cue.id, event.target.value))}>{!assignment && <option value="" disabled>Chọn vai</option>}{profile.speakers.map(speaker => <option value={speaker.id} key={speaker.id}>{speaker.name || speaker.id}</option>)}</select>{assignment?.uncertain && <button className="text-button" disabled={locked} onClick={() => edit(current => setDubbingAssignment(current, cue.id, assignment.speakerId))}><Icon name="check" size={14} />Xác nhận vai</button>}</div>
+          <div className="dubbing-assignment"><label htmlFor={`dubbing-cue-${cue.id}`}>Vai đọc</label><select id={`dubbing-cue-${cue.id}`} value={assignment?.speakerId || ''} disabled={locked} onChange={event => edit(current => setDubbingAssignment(current, cue.id, event.target.value))}>{!assignment && <option value="" disabled>Chọn vai</option>}{profile.speakers.map(speaker => <option value={speaker.id} key={speaker.id}>{speaker.name || speaker.id}</option>)}</select></div>
         </div>;
       })}</div>
       <div className="dubbing-actions"><div><p className="dubbing-quota">Phân vai/nghe thử/xuất dùng hạn mức Gemini.</p>{actions.savedReason && <p className="dubbing-action-reason">{actions.savedReason}</p>}</div><div className="dubbing-action-buttons"><button className="button secondary" disabled={!actions.canSave} onClick={() => action('save')}><Icon name={pending === 'save' ? 'loader' : 'save'} className={pending === 'save' ? 'spin' : ''} size={17} />{pending === 'save' ? 'Đang lưu…' : 'Lưu phân vai và giọng'}</button><button className="button primary" disabled={!actions.canRender} title={actions.savedReason} onClick={() => action('render')}><Icon name={pending === 'render' ? 'loader' : 'audio'} className={pending === 'render' ? 'spin' : ''} size={17} />{pending === 'render' ? 'Đang xếp hàng…' : 'Xuất MP4 lồng tiếng'}</button></div></div>

@@ -30,6 +30,12 @@ test('speaker analysis and preview keep source subtitles and use the Google key'
  const f=await setup(t),before=f.store.getCues(f.id);const analyzed=await f.run('analyze');assert.equal(analyzed.status,'completed');assert.equal(f.analyzed(),true);assert.equal(analyzed.dubbing.speakers.length,2);assert.equal(analyzed.dubbing.version,2);assert.deepEqual(f.store.getCues(f.id),before);
  const preview=await f.run('preview',{speakerId:'spk_2'});assert.equal(preview.status,'completed');assert.equal(preview.dubbingPreview.speakerId,'spk_2');assert.ok(preview.artifacts.dubbingPreviewPath);assert.ok(!preview.artifacts.dubbedPath);
 });
+
+test('speaker analysis without speaker labels fails without replacing the saved cast or subtitles',async t=>{
+ const f=await setup(t),before=f.store.getCues(f.id);
+ f.dub.transcribe=async()=>({segments:[{start:0,end:2,text:'Hello.'},{start:4,end:7,text:'How are you?',speaker:' '}],usage:{provider:'gemini'}});
+ const job=await f.run('analyze');assert.equal(job.status,'failed');assert.equal(job.error.code,'DUBBING_SPEAKERS_MISSING');assert.deepEqual(job.dubbing,f.profile);assert.deepEqual(f.store.getCues(f.id),before);assert.equal(f.calls(),0);
+});
 test('cancellation during progress aborts the subprocess without throwing from its event callback',async t=>{
  const f=await setup(t);let progressReturned=false;
  f.dub.mixDubbedVideo=async({signal,onProgress})=>{f.store.requestCancellation(f.id);onProgress(0.5);progressReturned=true;assert.equal(signal.aborted,true);signal.throwIfAborted();};
