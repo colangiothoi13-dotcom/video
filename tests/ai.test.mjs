@@ -112,6 +112,30 @@ test('long word streams are grouped to bounded subtitle lengths without inventin
   assert.equal(result.segments.map(s=>s.text).join(' '),words.map(w=>w.text).join(' '));
   for(const segment of result.segments) {assert.ok(segment.text.length<=84);assert.ok(segment.end-segment.start<=6);assert.ok(words.some(w=>Number.parseFloat(w.start_offset)===segment.start));assert.ok(words.some(w=>Number.parseFloat(w.end_offset)===segment.end));}
 });
+for(const [label,words,want] of [
+  ['leading',[word('Start','0.100s','0.100s'),word('here.','0.100s','0.600s')],[{start:0.1,end:0.6,text:'Start here.'}]],
+  ['trailing',[word('End','0.100s','0.600s'),word('here.','0.600s','0.600s')],[{start:0.1,end:0.6,text:'End here.'}]],
+  ['between',[word('Keep','0.100s','0.500s'),word('every','0.500s','0.500s'),word('word.','0.500s','1s')],[{start:0.1,end:1,text:'Keep every word.'}]],
+  ['consecutive',[word('Keep','0.100s','0.500s'),word('all','0.500s','0.500s'),word('these','0.500s','0.500s'),word('words.','0.500s','1s')],[{start:0.1,end:1,text:'Keep all these words.'}]],
+  ['punctuation',[word('Finish','0.100s','0.500s'),word('now.','0.500s','0.500s'),word('Next.','1s','1.500s')],[{start:0.1,end:0.5,text:'Finish now.'},{start:1,end:1.5,text:'Next.'}]],
+  ['leading punctuation',[word('Yes.','0.100s','0.100s'),word('Continue.','0.100s','0.600s')],[{start:0.1,end:0.6,text:'Yes. Continue.'}]],
+  ['after sentence break',[word('Done.','0.100s','0.600s'),word('Next','0.600s','0.600s'),word('chapter.','0.600s','0.900s')],[{start:0.1,end:0.6,text:'Done.'},{start:0.6,end:0.9,text:'Next chapter.'}]],
+  ['chapter pause',[word('Before.','0.100s','0.600s'),word('New','9s','9s'),word('chapter.','9s','9.500s')],[{start:0.1,end:0.6,text:'Before.'},{start:9,end:9.5,text:'New chapter.'}]],
+  ['trailing sentence break',[word('Done.','0.100s','0.600s'),word('Really.','0.600s','0.600s')],[{start:0.1,end:0.6,text:'Done. Really.'}]],
+]) {
+  test(`transcription preserves ${label} zero-duration words using adjacent provider spans`,async t=>{
+    const audio=await audioFile(t);const {options}=await asrFixture(t,{result:interaction(words.map(w=>w.text).join(' '),words)});
+    const result=await transcribe(audio,{...options,duration:10});
+    assert.deepEqual(result.segments.map(({start,end,text})=>({start,end,text})),want);
+    assert.equal(result.segments.map(s=>s.text).join(' '),words.map(w=>w.text).join(' '));
+    for(const [index,segment] of result.segments.entries()) {
+      assert.ok(segment.end>segment.start);assert.ok(segment.end-segment.start<=6);assert.ok(segment.text.length<=84);
+      assert.ok(!index||segment.start>=result.segments[index-1].end);
+      assert.ok(words.some(w=>Number.parseFloat(w.start_offset)===segment.start));assert.ok(words.some(w=>Number.parseFloat(w.end_offset)===segment.end));
+      assert.ok(words.some(w=>Number.parseFloat(w.end_offset)>Number.parseFloat(w.start_offset)&&Number.parseFloat(w.start_offset)>=segment.start&&Number.parseFloat(w.end_offset)<=segment.end));
+    }
+  });
+}
 for(const [label,result,code] of [
   ['silence',interaction('',[]),'NO_SPEECH'],['unannotated text',interaction('Hello',[]),'AI_INVALID_RESPONSE'],
   ['incomplete',{...interaction('Hello',[word('Hello','0s','1s')]),status:'incomplete'},'AI_INVALID_RESPONSE'],
@@ -119,6 +143,9 @@ for(const [label,result,code] of [
   ['nonfinite',interaction('Hello',[word('Hello','NaNs','1s')]),'AI_INVALID_RESPONSE'],
   ['negative',interaction('Hello',[word('Hello','-0.1s','1s')]),'AI_INVALID_RESPONSE'],
   ['zero duration',interaction('Hello',[word('Hello','1s','1s')]),'AI_INVALID_RESPONSE'],
+  ['all zero words',interaction('Hello world',[word('Hello','0s','0s'),word('world','1s','1s')]),'AI_INVALID_RESPONSE'],
+  ['reversed',interaction('Hello',[word('Hello','1s','0.5s')]),'AI_INVALID_RESPONSE'],
+  ['missing end',interaction('Hello',[{type:'word_info',text:'Hello',start_offset:'0s'}]),'AI_INVALID_RESPONSE'],
   ['past duration',interaction('Hello',[word('Hello','0s','3s')]),'AI_INVALID_RESPONSE'],
   ['out of order',interaction('Hello world',[word('Hello','1s','1.5s'),word('world','0.2s','0.5s')]),'AI_INVALID_RESPONSE'],
   ['overlap',interaction('Hello world',[word('Hello','0s','1s'),word('world','0.8s','1.2s')]),'AI_INVALID_RESPONSE'],
