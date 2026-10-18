@@ -56,6 +56,16 @@ test('real SQLite checkpoints resume only untranslated batches after restart, wi
   assert.equal(await readFile(f.store.getJobInternal(job.id).artifacts.videoPath,'utf8'),'mp4-1');assert.match(await readFile(f.store.getJobInternal(job.id).artifacts.srtPath,'utf8'),/Dịch three/);
 });
 
+test('invalid Gemini rules remain actionable without exposing private errors',async t=>{
+  const f=await setup(t);const job=await f.job();
+  const pipeline=createPipeline({store:f.store,tools:f.tools,dataDir:f.dir,workerId:'worker-a',config:f.config,ai:{...f.ai,translateSegments:async()=>{throw Object.assign(new Error('private-rule-content C:\\private\\prompts'),{code:'AI_RULES_INVALID'});}}});
+  f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);
+  assert.equal(result.status,'failed');assert.equal(result.error.code,'AI_RULES_INVALID');
+  assert.match(result.error.message,/gemini-subtitles\.md/);assert.doesNotMatch(result.error.message,/private-rule-content|C:/);
+  assert.equal(f.calls.translation.length,0);
+});
+
 test('a run captures one coherent configuration and supplies duration to timed transcription',async t=>{
   const f=await setup(t);const job=await f.job();let reads=0,asrOptions,translationOptions;
   const pipeline=createPipeline({store:f.store,dataDir:f.dir,workerId:'worker-a',config:()=>{reads++;return f.config;},tools:{...f.tools,extractAudio:async(_,output)=>{

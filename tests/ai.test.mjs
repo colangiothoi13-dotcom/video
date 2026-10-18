@@ -55,15 +55,18 @@ async function asrFixture(t,{result=interaction('Xin chào.',[word('Xin','0.100s
 }
 
 test('Gemini translation sends documented structured output and maps Unicode IDs without changing timing',async t=>{
+  let systemInstruction;
   const options=await fixture(t,(req,res,body)=>{
     assert.equal(req.url,'/v1beta/interactions');assert.equal(req.headers['x-goog-api-key'],'private-fixture-key');assert.equal(req.headers.authorization,undefined);
     const data=JSON.parse(body);assert.equal(data.model,'gemini-3.5-flash-lite');assert.equal(data.store,false);
     assert.deepEqual(JSON.parse(data.input),{language:'vi',segments:[{id:'s1',text:'Hello'},{id:'s2',text:'World'}]});
+    systemInstruction=data.system_instruction;
     assert.match(data.system_instruction,/untrusted/i);assert.equal(data.response_format.type,'text');assert.equal(data.response_format.mime_type,'application/json');
     assert.equal(data.response_format.schema.additionalProperties,false);assert.deepEqual(data.response_format.schema.properties.segments.items.required,['id','text']);
     send(res,200,response([{id:'s2',text:'Thế giới 🌎'},{id:'s1',text:'Xin chào'}]));
   });
   const result=await translateSegments(segments,{...options,model:'gemini-3.5-flash-lite',language:'vi'});
+  assert.match(systemInstruction,/# Quy tắc dịch phụ đề/u);
   assert.deepEqual(result.segments,[{...segments[0],text:'Xin chào',original:'Hello',sourceId:'s1'},{...segments[1],text:'Thế giới 🌎',original:'World',sourceId:'s2'}]);
   assert.equal(result.usage.total_tokens,30);assert.equal(result.usage.input_tokens,20);assert.equal(result.usage.output_tokens,10);assert.equal(result.usage.attempts,1);
   assert.equal(result.usage.provider,'gemini');assert.equal(result.usage.model,'gemini-3.5-flash-lite');
@@ -136,6 +139,24 @@ for(const [label,words,want] of [
     }
   });
 }
+for(const [label,words,want] of [
+  ['partial overlap',[word('Hello','0s','1s'),word('world.','0.8s','1.2s')],[{start:0,end:1.2,text:'Hello world.'}]],
+  ['contained word',[word('Keep','0.1s','0.9s'),word('this.','0.4s','0.7s')],[{start:0.1,end:0.9,text:'Keep this.'}]],
+  ['backward overlapping word',[word('Every.','716.6s','716.9s'),word('single.','716.9s','717.1s'),word('word.','716.8s','716.9s'),word('stays.','716.9s','717s')],[{start:716.6,end:717.1,text:'Every. single. word. stays.'}]],
+  ['overlapping zero word',[word('Keep','0s','1s'),word('all','0.5s','0.5s'),word('words.','0.8s','1.2s')],[{start:0,end:1.2,text:'Keep all words.'}]],
+]) {
+  test(`transcription retains ${label} in a shared provider span`,async t=>{
+    const audio=await audioFile(t);const {options}=await asrFixture(t,{result:interaction(words.map(w=>w.text).join(' '),words)});
+    const result=await transcribe(audio,{...options,duration:730.081});
+    assert.deepEqual(result.segments.map(({start,end,text})=>({start,end,text})),want);
+    assert.equal(result.segments.map(s=>s.text).join(' '),words.map(w=>w.text).join(' '));
+    for(const [index,segment] of result.segments.entries()) {
+      assert.ok(!index||segment.start>=result.segments[index-1].end);
+      assert.ok(words.some(w=>Number.parseFloat(w.start_offset)===segment.start));
+      assert.ok(words.some(w=>Number.parseFloat(w.end_offset)===segment.end));
+    }
+  });
+}
 for(const [label,result,code] of [
   ['silence',interaction('',[]),'NO_SPEECH'],['unannotated text',interaction('Hello',[]),'AI_INVALID_RESPONSE'],
   ['incomplete',{...interaction('Hello',[word('Hello','0s','1s')]),status:'incomplete'},'AI_INVALID_RESPONSE'],
@@ -148,7 +169,6 @@ for(const [label,result,code] of [
   ['missing end',interaction('Hello',[{type:'word_info',text:'Hello',start_offset:'0s'}]),'AI_INVALID_RESPONSE'],
   ['past duration',interaction('Hello',[word('Hello','0s','3s')]),'AI_INVALID_RESPONSE'],
   ['out of order',interaction('Hello world',[word('Hello','1s','1.5s'),word('world','0.2s','0.5s')]),'AI_INVALID_RESPONSE'],
-  ['overlap',interaction('Hello world',[word('Hello','0s','1s'),word('world','0.8s','1.2s')]),'AI_INVALID_RESPONSE'],
   ['empty word',interaction('Hello',[word(' ','0s','1s')]),'AI_INVALID_RESPONSE'],
   ['lost words',interaction('Hello world',[word('Hello','0s','1s')]),'AI_INVALID_RESPONSE'],
   ['malformed content',{status:'completed',steps:[{type:'model_output',content:[null]}]},'AI_INVALID_RESPONSE']]) {
