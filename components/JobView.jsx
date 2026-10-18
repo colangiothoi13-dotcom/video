@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icons';
 import DubbingPanel from './DubbingPanel';
+import ClipPanel from './ClipPanel';
 import { fileUrl, formatDate, formatTime, isJobExpired, jobProgress, languageLabels, mergeDraft, previewMedia, request, stageLabels, statusLabels } from '../lib/client';
 
 export default function JobView({ jobId, onNavigate, onChanged, registerDirty }) {
@@ -15,7 +16,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
   const preview = previewMedia(jobId, job, sourceFailed); const renderedPreview = preview.rendered; const videoError = failedPreviewKey === preview.key;
   const conflict = dirty && baseVersion !== job?.subtitleVersion;
   const stale = job && job.subtitleVersion > job.renderedVersion;
-  useEffect(() => { setCurrentTime(0); }, [preview.key]);
+  useEffect(() => { setCurrentTime(0); }, [preview.key, cues.length > 0]);
   useEffect(() => { registerDirty(dirty || dubbingDirty); return () => registerDirty(false); }, [dirty, dubbingDirty, registerDirty]);
   async function load({ reset = false } = {}) {
     const sequence = ++loadSequence.current;
@@ -70,7 +71,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
   return <>
     <button className="text-button muted back-link" onClick={() => onNavigate('history')}><Icon name="arrowLeft" size={16} /> Lịch sử video</button>
     <div className="result-heading"><div><div className="eyebrow">KHÔNG GIAN CHỈNH SỬA</div><h1>{job.title || 'Video của bạn'}</h1><p>{languageLabels[job.targetLanguage] || job.targetLanguage} · {job.duration ? formatTime(job.duration) : 'Đang kiểm tra thời lượng'} · Tạo lúc {formatDate(job.createdAt)}</p></div><span className={`status-pill ${expired ? 'expired' : job.status}`}><span />{expired ? statusLabels.expired : statusLabels[job.status] || job.status}</span></div>
-    {!!cues.length && !expired && <div className="retry-row"><button className="button secondary" onClick={() => document.getElementById('dubbing-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Icon name="audio" size={17} />Phân vai và lồng tiếng</button></div>}
+    {!expired && (!!cues.length || job.duration > 0) && <div className="retry-row">{!!cues.length && <button className="button secondary" onClick={() => document.getElementById('dubbing-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Icon name="audio" size={17} />Phân vai và lồng tiếng</button>}{job.duration > 0 && <button className="button secondary" onClick={() => document.getElementById('clips-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Icon name="film" size={17} />Cắt video</button>}</div>}
     {error && <div className="notice error" role="alert"><Icon name="warning" /><span>{error}</span><button className="text-button" onClick={() => load()}>Kết nối lại</button></div>}
     {message && <div className="notice success" role="status"><Icon name="checkCircle" /><span>{message}</span></div>}
     {job.error && <div className="notice error"><Icon name="warning" /><span>{typeof job.error === 'string' ? job.error : job.error.message || 'Không xử lý được video. Hãy kiểm tra nguồn và thử lại.'}</span></div>}
@@ -85,6 +86,8 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
       <div className="editor-action-bar"><div><span className={`save-dot ${dirty ? 'unsaved' : ''}`} /><span>{dirty ? `${Object.keys(changes).length} đoạn chưa lưu` : `Phụ đề v${job.subtitleVersion} đã lưu`}</span></div><div className="editor-actions"><button className="button secondary" disabled={!dirty || !!busy || running || conflict} onClick={() => action('save')}><Icon name={busy === 'save' ? 'loader' : 'save'} className={busy === 'save' ? 'spin' : ''} size={17} />{busy === 'save' ? 'Đang lưu…' : 'Lưu phụ đề'}</button><a className={`button secondary ${dirty ? 'disabled' : ''}`} href={dirty ? undefined : fileUrl(jobId, 'srt')} download aria-disabled={dirty} tabIndex={dirty ? -1 : 0}><Icon name="arrowDown" size={17} />SRT</a><button className="button secondary" disabled={dirty || !!busy || running} onClick={() => action('render')}><Icon name={busy === 'render' ? 'loader' : 'refresh'} className={busy === 'render' ? 'spin' : ''} size={17} />Xuất lại</button>{job.renderedVersion > 0 && <a className="button primary" href={fileUrl(jobId, 'video')} download><Icon name="arrowDown" size={17} />{stale ? 'MP4 bản cũ' : 'Tải MP4'}</a>}</div></div>
       <DubbingPanel key={jobId} job={job} cues={cues} subtitleDirty={dirty} busy={!!busy || running} onSeek={seek} onChanged={async () => { await load(); await onChanged(); }} onDirtyChange={setDubbingDirty} />
     </>}
+    {!expired && !cues.length && job.duration > 0 && <section className="panel video-column"><div className="video-frame"><video key={preview.key} ref={videoRef} controls preload="metadata" src={fileUrl(jobId, 'source')} onTimeUpdate={event => setCurrentTime(event.currentTarget.currentTime)} onError={() => setFailedPreviewKey(preview.key)} aria-label="Video gốc để chọn đoạn cắt" /></div>{videoError && <p className="notice warning">Trình duyệt chưa phát được định dạng nguồn. Bạn vẫn có thể nhập mốc thời gian và xuất các đoạn MP4.</p>}</section>}
+    {!expired && job.duration > 0 && <ClipPanel key={`clips-${jobId}`} job={job} currentTime={currentTime} onSeek={seek} busy={!!busy || running} dirty={dirty || dubbingDirty} onChanged={async () => { await load(); await onChanged(); }} />}
     {!cues.length && !running && !expired && <div className="panel empty-state"><Icon name="subtitles" size={36} /><h2>Chưa có phụ đề để biên tập</h2><p>Kết quả sẽ xuất hiện sau khi video được nhận dạng và dịch thành công.</p></div>}
   </>;
 }
