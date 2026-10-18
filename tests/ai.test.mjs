@@ -20,7 +20,7 @@ async function fixture(t,handler) {
   t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
   t.after(()=>assert.deepEqual(failures,[]));
   const origin=`http://127.0.0.1:${server.address().port}`;
-  return {apiKey:'private-fixture-key',apiBase:`${origin}/v1beta`,uploadBase:`${origin}/upload/v1beta`,retryDelayMs:1,maxRetryDelayMs:10,pollDelayMs:1,timeoutMs:1000,cleanupTimeoutMs:100,origin};
+  return {apiKey:'private-fixture-key',apiBase:`${origin}/v1beta`,uploadBase:`${origin}/upload/v1beta`,retryDelayMs:1,maxRetryDelayMs:10,validationRetryDelayMs:1,pollDelayMs:1,timeoutMs:1000,cleanupTimeoutMs:100,origin};
 }
 function send(res,status,data) {res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(data));}
 async function audioFile(t,contents='fixture audio') {
@@ -102,6 +102,45 @@ test('transcription uploads bytes, polls processing, uses real word offsets and 
   const result=await transcribe(audio,{...options,duration:2,model:'gemini-3.5-transcribe'});
   assert.deepEqual(result.segments,[{id:'s1',sourceId:'s1',start:0.1,end:0.85,text:'Xin chào.'}]);assert.equal(result.usage.audioSeconds,2);assert.equal(result.usage.total_tokens,30);assert.equal(result.usage.provider,'gemini');assert.equal(result.usage.model,'gemini-3.5-transcribe');
   assert.deepEqual(calls,['POST /upload/v1beta/files','POST /upload/session','GET /v1beta/files/fixture-audio','POST /v1beta/interactions','DELETE /v1beta/files/fixture-audio']);
+});
+test('invalid timed ASR retries once using the same upload and accounts for both responses',async t=>{
+  let generations=0;const audio=await audioFile(t);
+  const {options,calls}=await asrFixture(t,{onRequest:(req,res)=>{if(req.url==='/v1beta/interactions'){generations++;send(res,200,generations===1?interaction('Hello.',[word('Hello.','NaNs','1s')]):interaction('Hello.',[word('Hello.','0s','1s')]));return true;}}});
+  const result=await transcribe(audio,{...options,duration:2});
+  assert.equal(generations,2);assert.equal(result.segments[0].text,'Hello.');assert.equal(result.usage.attempts,2);assert.equal(result.usage.validationAttempts,2);assert.equal(result.usage.total_tokens,60);
+  assert.equal(result.usage.validationFailures[0].reason,'INVALID_OFFSET');assert.equal(calls.filter(c=>c==='POST /upload/v1beta/files').length,1);assert.equal(calls.filter(c=>c.startsWith('DELETE ')).length,1);
+});
+test('invalid timed ASR stops after two generations with a safe reason and retained usage',async t=>{
+  let generations=0;const audio=await audioFile(t);
+  const {options}=await asrFixture(t,{onRequest:(req,res)=>{if(req.url==='/v1beta/interactions'){generations++;send(res,200,interaction('Hello.',[word('Hello.','NaNs','1s')]));return true;}}});
+  await assert.rejects(transcribe(audio,{...options,duration:2}),failure=>{assert.equal(failure.code,'AI_INVALID_RESPONSE');assert.equal(failure.validation.reason,'INVALID_OFFSET');assert.equal(failure.attempts,2);assert.equal(failure.providerUsage.total_tokens,60);return true;});assert.equal(generations,2);
+});
+test('speech absence does not trigger another paid ASR generation',async t=>{
+  const audio=await audioFile(t);const {options,calls}=await asrFixture(t,{result:interaction('',[])});
+  await assert.rejects(transcribe(audio,{...options,duration:2}),{code:'NO_SPEECH'});assert.equal(calls.filter(c=>c==='POST /v1beta/interactions').length,1);
+});
+test('ASR validation recovery counts transient HTTP retries as well as regeneration',async t=>{
+  let requests=0;const audio=await audioFile(t);
+  const {options}=await asrFixture(t,{onRequest:(req,res)=>{if(req.url==='/v1beta/interactions'){requests++;send(res,requests<3?503:200,requests<3?{error:{status:'UNAVAILABLE'}}:interaction('Hello.',[word('Hello.',requests===3?'NaNs':'0s','1s')]));return true;}}});
+  const result=await transcribe(audio,{...options,duration:2});assert.equal(requests,4);assert.equal(result.usage.attempts,4);assert.equal(result.usage.validationAttempts,2);assert.equal(result.usage.total_tokens,60);
+});
+test('abort during validation backoff stops regeneration and keeps upload cleanup independent',async t=>{
+  const audio=await audioFile(t),controller=new AbortController();let requests=0;
+  const {options,calls}=await asrFixture(t,{onRequest:(req,res)=>{if(req.url==='/v1beta/interactions'){requests++;send(res,200,interaction('Hello.',[word('Hello.','NaNs','1s')]));setTimeout(()=>controller.abort(),50);return true;}}});
+  await assert.rejects(transcribe(audio,{...options,duration:2,validationRetryDelayMs:1000,signal:controller.signal}),failure=>{assert.equal(failure.name,'AbortError');assert.equal(failure.attempts,1);assert.equal(failure.providerUsage.total_tokens,30);return true;});assert.equal(requests,1);assert.equal(calls.at(-1),'DELETE /v1beta/files/fixture-audio');
+});
+test('cancelled ASR regeneration retains known usage and all HTTP attempts before cancellation',async t=>{
+  const audio=await audioFile(t),controller=new AbortController();let requests=0;
+  const {options,calls}=await asrFixture(t,{onRequest:(req,res)=>{if(req.url==='/v1beta/interactions'){requests++;
+    if(requests===1)send(res,200,interaction('Hello.',[word('Hello.','NaNs','1s')]));
+    else if(requests===2)send(res,503,{error:{status:'UNAVAILABLE'}});
+    else {controller.abort(Object.assign(new Error('Stopped'),{code:'JOB_CANCELLED'}));res.destroy();}return true;
+  }}});
+  await assert.rejects(transcribe(audio,{...options,duration:2,signal:controller.signal}),failure=>{assert.equal(failure.code,'JOB_CANCELLED');assert.equal(failure.attempts,3);assert.equal(failure.providerUsage.total_tokens,30);assert.equal(failure.validationFailures[0].reason,'INVALID_OFFSET');return true;});assert.equal(requests,3);assert.equal(calls.at(-1),'DELETE /v1beta/files/fixture-audio');
+});
+test('invalid translation retains real HTTP attempts, usage and a precise safe validation reason',async t=>{
+  let requests=0;const options=await fixture(t,(_,res)=>++requests<3?send(res,503,{error:{status:'UNAVAILABLE'}}):send(res,200,response([{id:'s1',text:'Xin chào'}])));
+  await assert.rejects(translateSegments(segments,options),failure=>{assert.equal(failure.code,'AI_INVALID_RESPONSE');assert.equal(failure.attempts,3);assert.equal(failure.providerUsage.total_tokens,30);assert.equal(failure.validation.reason,'SEGMENT_COUNT_MISMATCH');return true;});assert.equal(requests,3);
 });
 test('opt-in speaker analysis requests diarization and retains labels without changing default transcripts',async t=>{
   const audio=await audioFile(t),words=[word('Hello.','0s','0.9s',{speaker:'spk_1'}),word('World.','1s','1.9s',{speaker:'spk_2'})];
