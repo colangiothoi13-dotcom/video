@@ -70,6 +70,7 @@ export default function JobView({ jobId, onNavigate, onChanged, registerDirty })
   return <>
     <button className="text-button muted back-link" onClick={() => onNavigate('history')}><Icon name="arrowLeft" size={16} /> Lịch sử video</button>
     <div className="result-heading"><div><div className="eyebrow">KHÔNG GIAN CHỈNH SỬA</div><h1>{job.title || 'Video của bạn'}</h1><p>{languageLabels[job.targetLanguage] || job.targetLanguage} · {job.duration ? formatTime(job.duration) : 'Đang kiểm tra thời lượng'} · Tạo lúc {formatDate(job.createdAt)}</p></div><span className={`status-pill ${expired ? 'expired' : job.status}`}><span />{expired ? statusLabels.expired : statusLabels[job.status] || job.status}</span></div>
+    {!!cues.length && !expired && <div className="retry-row"><button className="button secondary" onClick={() => document.getElementById('dubbing-title')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Icon name="audio" size={17} />Phân vai và lồng tiếng</button></div>}
     {error && <div className="notice error" role="alert"><Icon name="warning" /><span>{error}</span><button className="text-button" onClick={() => load()}>Kết nối lại</button></div>}
     {message && <div className="notice success" role="status"><Icon name="checkCircle" /><span>{message}</span></div>}
     {job.error && <div className="notice error"><Icon name="warning" /><span>{typeof job.error === 'string' ? job.error : job.error.message || 'Không xử lý được video. Hãy kiểm tra nguồn và thử lại.'}</span></div>}
