@@ -38,7 +38,7 @@ Có thể cấu hình qua `GEMINI_API_KEY` và `GEMINI_TRANSLATION_MODEL`; biế
 
 Nếu phiên khác sửa cùng phụ đề, ứng dụng giữ bản đang soạn và báo xung đột. Sao chép nội dung cần giữ rồi dùng **Nạp bản máy chủ** để đồng bộ. Các nút lưu/xuất lại không tự ghi đè phiên bản mới hơn.
 
-Giới hạn: tối đa 25 phút và 500 MB mỗi video. Kết quả MP4 H.264/AAC tối đa 720p theo hướng nguồn, giữ tỉ lệ, không phóng lớn video nhỏ. SRT dùng UTF-8, tối đa hai dòng mỗi đoạn; câu dịch dài được cảnh báo để rút gọn. Nguồn không có âm thanh/lời nói, tệp lỗi và nội dung riêng tư/DRM có thể không xử lý được.
+Web tự đọc thời lượng và xử lý trọn video nguồn đã kết thúc, không chặn ở 25 phút. Video từ link tối đa 5 GB; tệp tải lên từ máy tối đa 500 MB. Âm thanh dài hơn 30 phút được nhận dạng tuần tự theo các phần tối đa 20 phút rồi ghép mốc về video gốc, kể cả phần cuối ngắn. Kết quả MP4 H.264/AAC tối đa 720p theo hướng nguồn, giữ tỉ lệ, không phóng lớn video nhỏ. SRT dùng UTF-8, tối đa hai dòng mỗi đoạn; câu dịch dài được cảnh báo để rút gọn. Nguồn không có âm thanh/lời nói, tệp lỗi và nội dung riêng tư/DRM có thể không xử lý được. Nhãn người nói thuộc từng phần âm thanh riêng; cùng nhân vật ở các phần khác nhau có thể cần đổi lại vai/giọng trong phần lồng tiếng.
 
 ## Chạy nền và tắt máy
 

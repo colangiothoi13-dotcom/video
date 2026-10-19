@@ -15,8 +15,8 @@ import { readRoute, routeHash, validateSource, buildJobForm, mergeDraft, request
 //    show actionable errors without erasing input. No seeded jobs/fake progress.
 // 6. At 390px viewport: source tabs, settings, editor and action bar work without
 //    horizontal scrolling; keyboard labels/focus and mobile navigation work.
-// 7. User-approved duration cap is 25 minutes / 1500 seconds: verify a spoken
-//    source at the boundary is accepted and >1500 seconds is rejected by probe.
+// 7. Source duration is read automatically: verify a completed spoken source
+//    longer than 25 minutes is accepted and its final speech is retained.
 //    The Gemini migration has not been verified with a live key; upload/URL AI E2E remains unverified.
 
 test('unsupported source switches after polling completes and reloads every rendered version without duplicate captions',()=>{

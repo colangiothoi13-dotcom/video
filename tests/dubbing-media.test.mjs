@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,readdir,rm,stat,writeFile} from 'node:fs/promises';
+import {mkdtemp,open,readFile,readdir,rm,stat,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {toolPaths} from '../lib/media.mjs';
@@ -46,6 +46,14 @@ function amplitude(audio,start,end,frequency) {
 }
 async function video(output,duration=3) {
   await ffmpeg(['-f','lavfi','-i',`color=c=blue:s=96x64:r=10:d=${duration}`,'-f','lavfi','-i',`sine=frequency=440:sample_rate=48000:duration=${duration}`,'-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest','-y',output]);
+}
+async function bytesAt(filename,position,length) {
+  const file=await open(filename,'r');
+  try {
+    const bytes=Buffer.alloc(length),result=await file.read(bytes,0,length,position);
+    assert.equal(result.bytesRead,length);
+    return bytes;
+  } finally { await file.close(); }
 }
 
 test('speech preparation preserves fitting phrases and converts stereo WAV to 24 kHz mono PCM',async t=>{
@@ -124,6 +132,80 @@ test('timeline rejects overlap, nonfinite timing and phrase overflow without rep
     [{path:input,start:0,end:0.1}],
   ]) await assert.rejects(media.buildVoiceTrack({clips,duration:1,outputPath:output}),error=>/^DUBBING_/.test(error.code));
   await assert.rejects(media.buildVoiceTrack({clips:[{path:input,start:0,end:0.3}],duration:1,outputPath:input}),error=>error.code==='INVALID_OUTPUT');
+  assert.equal(await readFile(output,'utf8'),'previous track');
+});
+
+test('generated timelines above the upload limit remain usable without relaxing speech input limits',async t=>{
+  const dir=await fixture(t),input=path.join(dir,'captioned.mp4'),track=path.join(dir,'three-hours.wav'),output=path.join(dir,'dubbed.mp4');
+  await video(input,0.2);
+  await media.buildVoiceTrack({clips:[],duration:10800,outputPath:track});
+  assert.equal((await stat(track)).size,518400044);
+  assert.equal((await bytesAt(track,0,4)).toString('ascii'),'RIFF');
+  const result=await media.mixDubbedVideo({inputPath:input,voiceTrackPath:track,outputPath:output,duration:10800});
+  assert.ok(result.hasAudio && result.duration>0,'a short source only consumes the prefix of the sparse timeline');
+  await assert.rejects(media.prepareSpeechClip({inputPath:track,outputPath:path.join(dir,'phrase.wav'),slotSeconds:10800}),error=>error.code==='DUBBING_INVALID_AUDIO');
+});
+
+test('RF64 timelines retain late samples beyond four GiB and can be mixed',async t=>{
+  const dir=await fixture(t),input=path.join(dir,'captioned.mp4'),speech=path.join(dir,'speech.wav'),track=path.join(dir,'twenty-five-hours.wav'),output=path.join(dir,'dubbed.mp4');
+  await video(input,0.2); await tone(speech,0.02);
+  const payload=wave(await readFile(speech)).data;
+  await media.buildVoiceTrack({clips:[{path:speech,start:89999.5,end:89999.6}],duration:90000,outputPath:track});
+  assert.equal((await stat(track)).size,4320000080);
+  const header=await bytesAt(track,0,80);
+  assert.equal(header.toString('ascii',0,4),'RF64');
+  assert.equal(header.readUInt32LE(4),0xffffffff);
+  assert.equal(header.toString('ascii',12,16),'ds64');
+  assert.equal(header.readUInt32LE(16),28);
+  assert.equal(header.readBigUInt64LE(20),4320000072n);
+  assert.equal(header.readBigUInt64LE(28),4320000000n);
+  assert.equal(header.readBigUInt64LE(36),2160000000n);
+  assert.equal(header.readUInt32LE(44),0);
+  assert.equal(header.toString('ascii',72,76),'data');
+  assert.equal(header.readUInt32LE(76),0xffffffff);
+  assert.deepEqual(await bytesAt(track,4319976080,payload.length),payload,'the RF64 header must not shift the final phrase');
+  assert.deepEqual(await bytesAt(track,4320000078,2),Buffer.alloc(2));
+  const metadata=JSON.parse((await runProcess(toolPaths.ffprobe,['-v','error','-show_format','-of','json',track])).stdout);
+  assert.equal(Number(metadata.format.duration),90000);
+  const result=await media.mixDubbedVideo({inputPath:input,voiceTrackPath:track,outputPath:output,duration:90000});
+  assert.ok(result.hasAudio && result.duration>0);
+});
+
+test('RF64 input requires consistent safe ds64 sizes and sample counts',async t=>{
+  const dir=await fixture(t),input=path.join(dir,'source.wav'),output=path.join(dir,'track.wav');
+  const source=Buffer.alloc(82);
+  source.write('RF64'); source.writeUInt32LE(0xffffffff,4); source.write('WAVEds64',8);
+  source.writeUInt32LE(28,16); source.writeBigUInt64LE(74n,20); source.writeBigUInt64LE(2n,28); source.writeBigUInt64LE(1n,36);
+  source.write('fmt ',48); source.writeUInt32LE(16,52); source.writeUInt16LE(1,56); source.writeUInt16LE(1,58);
+  source.writeUInt32LE(24000,60); source.writeUInt32LE(48000,64); source.writeUInt16LE(2,68); source.writeUInt16LE(16,70);
+  source.write('data',72); source.writeUInt32LE(0xffffffff,76); source.writeInt16LE(1234,80);
+  await writeFile(input,source);
+  await media.buildVoiceTrack({clips:[{path:input,start:0,end:1}],duration:1,outputPath:output});
+  assert.equal((await bytesAt(output,44,2)).readInt16LE(0),1234);
+  for(const corrupt of [
+    bytes=>bytes.write('JUNK',12),
+    bytes=>bytes.writeBigUInt64LE(73n,20),
+    bytes=>bytes.writeBigUInt64LE(9007199254740992n,28),
+    bytes=>bytes.writeBigUInt64LE(2n,36),
+    bytes=>bytes.writeUInt32LE(1,44),
+  ]) {
+    const invalid=Buffer.from(source); corrupt(invalid); await writeFile(input,invalid);
+    await assert.rejects(media.buildVoiceTrack({clips:[{path:input,start:0,end:1}],duration:1,outputPath:output}),error=>error.code==='DUBBING_INVALID_AUDIO');
+  }
+});
+
+test('timeline accepts more than ten thousand short nonoverlapping phrases',{timeout:60000},async t=>{
+  const dir=await fixture(t),input=path.join(dir,'one-frame.wav'),output=path.join(dir,'track.wav');
+  await tone(input,1/24000);
+  const clips=Array.from({length:10001},(_,index)=>({path:input,start:index/1000,end:(index+1)/1000}));
+  await media.buildVoiceTrack({clips,duration:10.001,outputPath:output});
+  assert.equal((await stat(output)).size,480092);
+});
+
+test('timeline rejects durations whose sample positions cannot be represented safely',async t=>{
+  const dir=await fixture(t),output=path.join(dir,'track.wav');
+  await writeFile(output,'previous track');
+  await assert.rejects(media.buildVoiceTrack({clips:[],duration:Number.MAX_SAFE_INTEGER,outputPath:output}),error=>error.code==='DUBBING_INVALID_TIMELINE');
   assert.equal(await readFile(output,'utf8'),'previous track');
 });
 

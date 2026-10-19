@@ -46,8 +46,10 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
   }
   function editSpeaker(id, patch) { edit(current => ({ ...current, speakers: current.speakers.map(speaker => speaker.id === id ? { ...speaker, ...patch } : speaker) })); }
   function addSpeaker() {
-    if (!profile || locked || profile.speakers.length >= 8) return;
-    const id = Array.from({ length: 8 }, (_, index) => `spk_${index + 1}`).find(candidate => !profile.speakers.some(speaker => speaker.id === candidate));
+    if (!profile || locked) return;
+    const used = new Set(profile.speakers.map(speaker => speaker.id));
+    let index = 1; while (used.has(`spk_${index}`)) index++;
+    const id = `spk_${index}`;
     const voice = snapshot.voices[profile.speakers.length % snapshot.voices.length]?.id || profile.speakers[0]?.voice;
     edit(current => ({ ...current, speakers: [...current.speakers, { id, name: `Vai ${id.slice(4)}`, voice }] }));
   }
@@ -98,7 +100,7 @@ export default function DubbingPanel({ job, cues, subtitleDirty = false, busy = 
       {conflict && <div className="notice warning"><Icon name="warning" /><span>Máy chủ có cấu hình mới. Các thay đổi lồng tiếng chưa lưu vẫn được giữ trên màn hình này.</span><button className="text-button" onClick={reload} disabled={locked}>Nạp bản máy chủ</button></div>}
       {subtitleStale && !conflict && <div className="notice warning"><Icon name="info" /><span>Phụ đề đã đổi. Kiểm tra phân vai và lưu lại cho phụ đề v{job.subtitleVersion} trước khi nghe thử hoặc xuất.</span></div>}
       <div className="dubbing-analysis"><div><strong>Phân vai từ tiếng nói</strong><p>Video mới dùng Gemini tự nhận diện người nói trong lần nhận dạng phụ đề đầu tiên và phân vai khi dịch xong. Bạn có thể sửa tên vai, gán lại từng câu và chọn giọng có sẵn. Phân biệt từ 3 người nói trở lên còn thử nghiệm.</p></div><button className="button secondary" disabled={!actions.canAnalyze} title={actions.reason || (profile.version > 0 ? 'Chạy lại nhận dạng tiếng nói để cập nhật gợi ý phân vai.' : 'Nhận dạng tiếng nói để gợi ý phân vai cho video này.')} onClick={() => action('analyze')}><Icon name={pending === 'analyze' ? 'loader' : 'sparkles'} className={pending === 'analyze' ? 'spin' : ''} size={17} />{pending === 'analyze' ? 'Đang xếp hàng…' : profile.version > 0 ? 'Nhận diện lại người nói' : 'Phân vai tự động'}</button></div>
-      <div className="dubbing-section-heading"><h3>Vai và giọng <span>{profile.speakers.length}/8</span></h3><button className="text-button" disabled={locked || profile.speakers.length >= 8} onClick={addSpeaker}><Icon name="plus" size={16} />Thêm vai</button></div>
+      <div className="dubbing-section-heading"><h3>Vai và giọng <span>{profile.speakers.length} vai</span></h3><button className="text-button" disabled={locked} onClick={addSpeaker}><Icon name="plus" size={16} />Thêm vai</button></div>
       <div className="dubbing-speakers">{profile.speakers.map((speaker, index) => {
         const assigned = profile.assignments.filter(item => item.speakerId === speaker.id).length;
         const cue = dubbingPreviewCue(profile, cues, speaker.id); const previewing = pending === `preview:${speaker.id}`;

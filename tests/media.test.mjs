@@ -14,22 +14,21 @@ test('output dimensions respect landscape, portrait, ratio, even dimensions and 
   }
 });
 
-test('invalid media is rejected before AI: no audio, too long, too large, no video',()=>{
+test('invalid media is rejected before AI: no audio, invalid duration, too large, no video',()=>{
   assert.equal(typeof media.validateVideoMetadata,'function','media validation must exist');
   const good={duration:3,width:320,height:240,hasAudio:true};
   assert.throws(()=>media.validateVideoMetadata({...good,hasAudio:false}),/âm thanh/i);
-  assert.throws(()=>media.validateVideoMetadata({...good,duration:1500.001}),/1500/);
-  assert.throws(()=>media.validateVideoMetadata(good,500000001),/500/);
+  assert.throws(()=>media.validateVideoMetadata({...good,duration:Infinity}),{code:'INVALID_VIDEO'});
+  assert.throws(()=>media.validateVideoMetadata(good,5000000001),{code:'VIDEO_TOO_LARGE'});
   assert.throws(()=>media.validateVideoMetadata({...good,width:0}),/video/i);
   assert.doesNotThrow(()=>media.validateVideoMetadata({...good,duration:1500},500000000));
 });
 
-test('25-minute cap accepts the requested 1435-second video and the exact boundary before AI',()=>{
-  for(const duration of [1435,1500]) {
+test('video duration follows the complete source, including sources beyond 25 minutes',()=>{
+  for(const duration of [1435,1500,1500.001,7265.25]) {
     const metadata={duration,width:1280,height:720,hasAudio:true};
     assert.equal(media.validateVideoMetadata(metadata).duration,duration);
   }
-  assert.throws(()=>media.validateVideoMetadata({duration:1500.001,width:1280,height:720,hasAudio:true}),error=>error.code==='VIDEO_TOO_LONG');
 });
 
 test('process wrapper uses argument arrays literally and aborts active subprocesses',{timeout:10000},async()=>{
@@ -142,6 +141,6 @@ test('real ffmpeg renders Unicode captions at accented paths and extracts small 
     assert.ok(requestedProbe.hasAudio && Math.abs(requestedProbe.duration-1435)<1,`real approximately 1435-second video must be accepted before AI (actual ${requestedProbe.duration})`);
     const long=path.join(dir,'quá dài.mp4');
     await processTools.runProcess(ffmpeg,['-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t','1501','-c','copy','-y',long]);
-    await assert.rejects(media.probeVideo(long),/1500/);
+    assert.ok((await media.probeVideo(long)).duration>1500);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });

@@ -4,6 +4,8 @@ import http from 'node:http';
 import {mkdtemp, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import ffmpeg from 'ffmpeg-static';
+import {runProcess} from '../lib/process.mjs';
 import {transcribe, translateSegments, testAiConnection} from '../lib/ai.mjs';
 
 const segments=[{id:'s1',start:0,end:1,text:'Hello'},{id:'s2',start:1,end:2,text:'World'}];
@@ -225,8 +227,23 @@ for(const [label,result,code] of [
 }
 test('invalid duration and empty audio fail before any external work',async t=>{
   let requests=0;const options=await fixture(t,(_,res)=>{requests++;send(res,200,{});});const audio=await audioFile(t);
-  for(const duration of [undefined,0,-1,NaN,Infinity,1801])await assert.rejects(transcribe(audio,{...options,duration}),{code:'AI_INVALID_SEGMENTS'});
+  for(const duration of [undefined,0,-1,NaN,Infinity])await assert.rejects(transcribe(audio,{...options,duration}),{code:'AI_INVALID_SEGMENTS'});
   const empty=await audioFile(t,'');await assert.rejects(transcribe(empty,{...options,duration:1}),{code:'AUDIO_TOO_LARGE'});assert.equal(requests,0);
+});
+
+test('long Gemini transcription splits the entire local source and namespaces part-local speakers',async t=>{
+  const audio=await audioFile(t);await runProcess(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=r=8000:cl=mono','-t','1800.25','-c:a','libmp3lame','-b:a','8k','-y',audio]);
+  let parts=0,deleted=0;let options;
+  options=await fixture(t,(req,res,body)=>{
+    const file={name:'files/fixture-long',uri:`${options.origin}/v1beta/files/fixture-long`,mimeType:'audio/mp3',state:'ACTIVE'};
+    if(req.url==='/upload/v1beta/files'){assert.ok(Number(req.headers['x-goog-upload-header-content-length'])<25_000_000);res.writeHead(200,{'x-goog-upload-url':`${options.origin}/upload/session`});res.end();return;}
+    if(req.url==='/upload/session'){assert.ok(body.length<25_000_000);send(res,200,{file});return;}
+    if(req.method==='DELETE'){deleted++;send(res,200,{});return;}
+    assert.equal(req.url,'/v1beta/interactions');parts++;send(res,200,interaction('Hello.',[word('Hello.','0.100s','0.700s',{speaker:'speaker_1'})]));
+  });
+  const result=await transcribe(audio,{...options,duration:1800.25,diarization:true});
+  assert.equal(parts,2);assert.equal(deleted,2);assert.deepEqual(result.segments,[{id:'s1',sourceId:'s1',start:0.1,end:0.7,text:'Hello.',speaker:'chunk1:speaker_1'},{id:'s2',sourceId:'s2',start:1200.1,end:1200.7,text:'Hello.',speaker:'chunk2:speaker_1'}]);
+  assert.equal(result.usage.audioSeconds,1800.25);assert.equal(result.usage.attempts,2);assert.equal(result.usage.total_tokens,60);
 });
 test('failed file processing cleans up without transcribing',async t=>{
   const audio=await audioFile(t);const {options,calls}=await asrFixture(t,{state:'FAILED'});
