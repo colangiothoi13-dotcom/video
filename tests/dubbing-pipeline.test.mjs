@@ -11,12 +11,12 @@ async function setup(t){
  const created=store.createJob({title:'Dub'}),directory=path.join(dir,'jobs',created.id);await mkdir(directory,{recursive:true});const input=path.join(directory,'input.mp4'),video=path.join(directory,'video.mp4'),audio=path.join(directory,'speech.mp3');await writeFile(input,'source');await writeFile(video,'old-video');await writeFile(audio,'audio');
  store.updateJob(created.id,{duration:8,status:'completed',renderedVersion:1,artifacts:{inputPath:input,videoPath:video,audioPath:audio,posterPath:input}});
  const cues=[{id:'a',sourceId:'a',start:0,end:2,text:'Xin chào.',original:'Hello.'},{id:'b',sourceId:'b',start:4,end:7,text:'Bạn khỏe không?',original:'How are you?'}];store.saveCues(created.id,0,cues);
- const config={provider:'openai',apiKey:'sk-no-use',providerConfigs:{gemini:{apiKey:'google-private',transcriptionModel:'gemini-3.5-transcribe'}}};let calls=0,fail=false,analyzed=false;
- const dub={synthesizeSpeech:async(text,options)=>{assert.equal(options.apiKey,'google-private');calls++;if(fail&&text.includes('khỏe'))throw Object.assign(new Error('private-provider'),{code:'AI_RATE_LIMIT'});return {audio:Buffer.from('RIFF-fixture'),usage:{provider:'gemini',model:'gemini-3.8-flash-lite-tts',total_tokens:10}};},transcribe:async(_,options)=>{analyzed=options.diarization;return {segments:[{start:0,end:2,text:'Hello.',speaker:'a'},{start:4,end:7,text:'How are you?',speaker:'b'}],usage:{provider:'gemini'}};},prepareSpeechClip:async({outputPath})=>{await writeFile(outputPath,'clip');return {duration:2,speed:1};},buildVoiceTrack:async({outputPath})=>{await writeFile(outputPath,'track');return outputPath;},mixDubbedVideo:async({outputPath,onProgress})=>{onProgress?.(1);await writeFile(outputPath,'dubbed-video');return {};} };
+ const config={provider:'openai',apiKey:'sk-no-use',translationModel:'gpt-5.4-mini',providerConfigs:{gemini:{apiKey:'google-private',translationModel:'gemini-4-argon',transcriptionModel:'gemini-3.5-transcribe'}}};let calls=0,fail=false,analyzed=false,analysisOptions;
+ const dub={synthesizeSpeech:async(text,options)=>{assert.equal(options.apiKey,'google-private');calls++;if(fail&&text.includes('khỏe'))throw Object.assign(new Error('private-provider'),{code:'AI_RATE_LIMIT'});return {audio:Buffer.from('RIFF-fixture'),usage:{provider:'gemini',model:'gemini-3.8-flash-lite-tts',total_tokens:10}};},transcribe:async(_,options)=>{analysisOptions=options;analyzed=options.diarization;return {segments:[{start:0,end:2,text:'Hello.',speaker:'a'},{start:4,end:7,text:'How are you?',speaker:'b'}],usage:{provider:'gemini'}};},prepareSpeechClip:async({outputPath})=>{await writeFile(outputPath,'clip');return {duration:2,speed:1};},buildVoiceTrack:async({outputPath})=>{await writeFile(outputPath,'track');return outputPath;},mixDubbedVideo:async({outputPath,onProgress})=>{onProgress?.(1);await writeFile(outputPath,'dubbed-video');return {};} };
  const pipeline=createPipeline({store,dataDir:dir,workerId:'dub-worker',config,dubbing:dub,tools:{probeVideo:async()=>({duration:8,width:640,height:360,hasAudio:true}),renderVideo:async()=>{throw new Error('must use current captioned video');}}});
  const profile=store.saveDubbing(created.id,defaultDubbingProfile(cues,1)).dubbing;
  const run=async(action='render',extra={})=>{store.queueDubbing(created.id,{action,version:store.getJob(created.id).dubbing.version,subtitleVersion:1,...extra});store.claimNextJob('dub-worker');await pipeline.runJob(created.id);return store.getJobInternal(created.id);};
- return {store,id:created.id,profile,run,dub,calls:()=>calls,setFail:v=>fail=v,analyzed:()=>analyzed};
+ return {store,id:created.id,profile,run,dub,config,calls:()=>calls,setFail:v=>fail=v,analyzed:()=>analyzed,analysisOptions:()=>analysisOptions};
 }
 test('queued multivoice export preserves original video, snapshots versions and reuses synthesis cache',async t=>{
  const f=await setup(t),job=await f.run();assert.equal(job.status,'completed');assert.equal(job.dubbingOutput.version,1);assert.equal(job.dubbingOutput.subtitleVersion,1);assert.equal(await readFile(job.artifacts.videoPath,'utf8'),'old-video');assert.equal(await readFile(job.artifacts.dubbedPath,'utf8'),'dubbed-video');assert.equal(f.calls(),2);assert.equal(job.usage.dubbing.length,2);
@@ -29,6 +29,19 @@ test('failed TTS resumes cache on retry and never publishes partial dubbing',asy
 test('speaker analysis and preview keep source subtitles and use the Google key',async t=>{
  const f=await setup(t),before=f.store.getCues(f.id);const analyzed=await f.run('analyze');assert.equal(analyzed.status,'completed');assert.equal(f.analyzed(),true);assert.equal(analyzed.dubbing.speakers.length,2);assert.equal(analyzed.dubbing.version,2);assert.deepEqual(f.store.getCues(f.id),before);
  const preview=await f.run('preview',{speakerId:'spk_2'});assert.equal(preview.status,'completed');assert.equal(preview.dubbingPreview.speakerId,'spk_2');assert.ok(preview.artifacts.dubbingPreviewPath);assert.ok(!preview.artifacts.dubbedPath);
+ assert.partialDeepStrictEqual(f.analysisOptions(),{apiKey:'google-private',model:'gemini-4-argon',diarization:true,duration:8});
+});
+
+for(const [provider,selected,stored,expected] of [
+ ['gemini','gemini-active',undefined,'gemini-active'],
+ ['gemini','gemini-active','gemini-stored','gemini-stored'],
+ ['openai','gpt-5.4-mini',undefined,'gemini-3.5-flash-lite'],
+])test(`speaker analysis selects ${expected} with ${provider} active and stored Gemini ${stored??'unset'}`,async t=>{
+ const f=await setup(t);f.config.provider=provider;f.config.translationModel=selected;
+ f.config.providerConfigs.gemini.translationModel=stored;
+ f.config.transcriptionModel='gemini-3.5-transcribe';
+ const job=await f.run('analyze');assert.equal(job.status,'completed');
+ assert.equal(f.analysisOptions().model,expected);
 });
 
 test('speaker analysis without speaker labels fails without replacing the saved cast or subtitles',async t=>{

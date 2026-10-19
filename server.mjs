@@ -10,20 +10,21 @@ const projectRoot=path.dirname(fileURLToPath(import.meta.url));
 /** Custom Next server keeps HTTP and the independent SQLite worker separate. */
 export async function createWebServer({production=false,dataDir=path.resolve(process.env.DATA_DIR||'.data'),port=3000,nextApp,config,tools}={}) {
   const store=createStore(path.join(dataDir,'jobs.sqlite'));
-  let server,next,closing;
+  let server,next,closing,api;
   try {
     next=nextApp??(await import('next')).default({dev:!production,dir:projectRoot,hostname:'127.0.0.1',port});
-    await next.prepare();const app=express();app.disable('x-powered-by');app.use('/api',createApi({store,dataDir,config,tools}));
+    await next.prepare();const app=express();app.disable('x-powered-by');api=createApi({store,dataDir,config,tools});app.use('/api',api);
     const handler=next.getRequestHandler();app.use((req,res)=>handler(req,res));
     server=createServer(app);server.requestTimeout=30*60*1000;server.headersTimeout=30000;
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
     return {address:server.address(),async close(){
       if(!closing)closing=(async()=>{
+        await api?.close?.();
         await new Promise(resolve=>{const timer=setTimeout(()=>server.closeAllConnections(),10000);timer.unref();server.close(()=>{clearTimeout(timer);resolve();});server.closeIdleConnections();});
         await next.close?.();store.close();
       })();return closing;
     }};
-  }catch(error){server?.close();await next?.close?.();store.close();throw error;}
+  }catch(error){server?.close();await api?.close?.();await next?.close?.();store.close();throw error;}
 }
 
 /** Register ownership signals before preparation, retaining shutdown until close is possible. */

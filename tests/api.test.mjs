@@ -28,9 +28,9 @@ async function fixture(t, options={}) {
 test('settings remain secret and health caches expensive tool checks',async t=>{
   const f=await fixture(t);
   assert.equal((await f.call('/settings/test',{method:'POST'})).status,400);
-  const saved=await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'sk-private-test',translationModel:'gemini-test-model'})});
-  assert.deepEqual(await saved.json(),{provider:'gemini',configured:true,translationModel:'gemini-test-model',transcriptionModel:'gemini-3.5-transcribe'});
-  const text=await (await f.call('/settings')).text();assert.ok(!text.includes('sk-private'));
+  const saved=await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'gemini-private-test',translationModel:'gemini-test-model'})});
+  const savedStatus=await saved.json();assert.equal(savedStatus.provider,'gemini');assert.equal(savedStatus.configured,true);assert.equal(savedStatus.translationModel,'gemini-test-model');assert.equal(savedStatus.transcriptionModel,'gemini-test-model');
+  const text=await (await f.call('/settings')).text();assert.ok(!text.includes('private-test'));
   const health=await (await f.call('/health')).json();await f.call('/health');
   assert.equal(health.configured,true);assert.deepEqual(health.worker,{active:false,workerId:null,heartbeatAt:null});assert.equal(health.tools.ytdlp.available,false);assert.equal(f.probes(),1);
   assert.equal((await f.call('/settings',{method:'PUT',body:JSON.stringify({translationModel:'x',baseUrl:'https://evil.example'})})).status,400);
@@ -45,14 +45,28 @@ test('settings reject another provider model with a safe Gemini instruction and 
   assert.equal((await(await f.call('/settings')).json()).translationModel,'gemini-3.5-flash-lite');
 });
 
-test('connection check uses both Gemini models and exposes actual models without the key',async t=>{
+test('connection check uses the selected Gemini model for transcription and translation without exposing the key',async t=>{
   let received;const f=await fixture(t,{tools:{testAiConnection:async options=>{
     received=options;return {ok:true,translationModel:options.model,transcriptionModel:options.transcriptionModel};
   }}});
   await f.call('/settings',{method:'PUT',body:JSON.stringify({apiKey:'fixture-gemini-secret',translationModel:'gemini-custom'})});
   const response=await f.call('/settings/test',{method:'POST'});assert.equal(response.status,200);
-  assert.deepEqual(await response.json(),{ok:true,provider:'gemini',translationModel:'gemini-custom',transcriptionModel:'gemini-3.5-transcribe'});
-  assert.equal(received.apiKey,'fixture-gemini-secret');assert.equal(received.model,'gemini-custom');assert.equal(received.transcriptionModel,'gemini-3.5-transcribe');
+  assert.deepEqual(await response.json(),{ok:true,provider:'gemini',translationModel:'gemini-custom',transcriptionModel:'gemini-custom'});
+  assert.equal(received.apiKey,'fixture-gemini-secret');assert.equal(received.model,'gemini-custom');assert.equal(received.transcriptionModel,'gemini-custom');
+});
+
+test('OpenAI settings return a dropdown catalog, use the selected credentials for checks and keep the Google key private',async t=>{
+  let received;
+  const f=await fixture(t,{tools:{testAiConnection:async options=>{received=options;return {ok:true,translationModel:options.model,transcriptionModel:options.transcriptionModel};}}});
+  const response=await f.call('/settings',{method:'PUT',body:JSON.stringify({provider:'openai',apiKey:'sk-proj-api-fixture',translationModel:'gpt-5.4-mini',videoApiKey:'AIza-video-api-fixture'})});
+  assert.equal(response.status,200);const status=await response.json();
+  assert.equal(status.provider,'openai');assert.equal(status.configured,true);assert.equal(status.transcriptionModel,'whisper-1');assert.equal(status.videoConfigured,true);
+  assert.ok(status.translationModels.some(model=>model.id==='gpt-5.4-mini'));
+  assert.doesNotMatch(JSON.stringify(status),/sk-proj-api-fixture|AIza-video-api-fixture/);
+  const checked=await f.call('/settings/test',{method:'POST'});assert.equal(checked.status,200);
+  assert.equal((await checked.json()).provider,'openai');assert.equal(received.provider,'openai');assert.equal(received.apiKey,'sk-proj-api-fixture');assert.equal(received.transcriptionModel,'whisper-1');
+  const invalid=await f.call('/settings',{method:'PUT',body:JSON.stringify({provider:'gemini',apiKey:'sk-proj-wrong-provider'})});
+  assert.equal(invalid.status,400);assert.equal((await invalid.json()).error.code,'INVALID_KEY_PROVIDER');
 });
 test('mutation guard rejects foreign Origin, foreign Host and oversized JSON',async t=>{
   const f=await fixture(t);
@@ -150,6 +164,18 @@ test('retry and render refuse stale terminal reads after another actor claims th
 test('settings connection failures expose only safe error and never provider diagnostics',async t=>{
   let checks=0;const f=await fixture(t,{tools:{testAiConnection:async()=>{checks++;throw Object.assign(new Error('sk-secret D:\\private stderr'),{code:'AI_AUTH'});}}});
   await f.call('/settings',{method:'PUT',body:'{"apiKey":"sk-secret"}'});const response=await f.call('/settings/test',{method:'POST'});assert.equal(response.status,400);const payload=await response.text();assert.ok(!payload.includes('sk-secret'));assert.ok(!payload.includes('stderr'));assert.equal(checks,1);
+});
+for(const [label,failure,code] of [
+  ['blocked Internet permission',Object.assign(new Error('sk-secret D:\\private EACCES stderr'),{code:'AI_NETWORK_BLOCKED'}),'AI_NETWORK_BLOCKED'],
+  ['provider timeout',Object.assign(new Error('sk-secret D:\\private stderr'),{code:'AI_TIMEOUT'}),'AI_TIMEOUT'],
+  ['native deadline',new DOMException('sk-secret D:\\private stderr','TimeoutError'),'AI_TIMEOUT'],
+])test(`settings connection check returns safe guidance for ${label}`,async t=>{
+  const f=await fixture(t,{tools:{testAiConnection:async()=>{throw failure;}}});
+  await f.call('/settings',{method:'PUT',body:JSON.stringify({provider:'openai',apiKey:'sk-proj-fixture'})});
+  const response=await f.call('/settings/test',{method:'POST'});assert.equal(response.status,400);const payload=await response.json();assert.equal(payload.error.code,code);
+  if(code==='AI_NETWORK_BLOCKED'){assert.match(payload.error.message,/quyền truy cập Internet/);assert.match(payload.error.message,/Khoi-dong\.cmd/);}
+  else assert.match(payload.error.message,/quá lâu/);
+  assert.doesNotMatch(JSON.stringify(payload),/sk-secret|D:\\private|stderr|EACCES/);
 });
 test('custom server binds loopback and mounts API before page handler',async t=>{
   const module=await import('../server.mjs');

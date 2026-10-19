@@ -15,7 +15,7 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate,timeout=3000) {const end=Date.now()+timeout;while(!predicate()){if(Date.now()>end)throw new Error('condition timed out');await sleep(10);}}
 async function setup(t,{failBatch=false,noSpeech=false,tools:overrides={}}={}) {
   const dir=await mkdtemp(path.join(tmpdir(),'vietsub-pipeline-'));let now=Date.now();const store=createStore(path.join(dir,'jobs.sqlite'),{now:()=>now});
-  const calls={transcribe:0,translation:[],render:0,aiProgress:[]};const extraStores=[];
+  const calls={transcribe:0,translation:[],models:[],render:0,aiProgress:[]};const extraStores=[];
   const server=http.createServer(async(req,res)=>{
     let body='';for await(const chunk of req)body+=chunk;res.setHeader('content-type','application/json');
     calls.aiProgress.push(store.listJobs('running').map(job=>({stage:job.stage,progress:job.progress})));
@@ -25,11 +25,16 @@ async function setup(t,{failBatch=false,noSpeech=false,tools:overrides={}}={}) {
     if(req.method==='POST'&&req.url==='/upload/session'){res.end(JSON.stringify({file}));return;}
     if(req.url==='/v1beta/files/fixture-audio'){res.end(JSON.stringify(req.method==='DELETE'?{}:file));return;}
     if(req.method!=='POST'||req.url!=='/v1beta/interactions'){res.statusCode=404;res.end('{}');return;}
-    const request=JSON.parse(body);
+    const request=JSON.parse(body);calls.models.push(request.model);
     const completed=(text,annotations)=>({status:'completed',steps:[{type:'model_output',content:[{type:'text',text,...(annotations?{annotations}:{})}]}],usage:{total_input_tokens:4,total_output_tokens:3,total_tokens:7}});
     if(request.generation_config?.transcription_config){
       calls.transcribe++;const words=noSpeech?[]:[0,1,2].map(i=>({type:'word_info',text:['one.','two.','three.'][i],start_offset:`${i}.000s`,end_offset:`${i}.900s`}));
       res.end(JSON.stringify(completed(noSpeech?'':'one. two. three.',words)));return;
+    }
+    if(Array.isArray(request.input)&&request.input.some(part=>part.type==='audio')){
+      calls.transcribe++;
+      const segments=noSpeech?[]:[0,1,2].map(i=>({start:i,end:i+.9,text:['one.','two.','three.'][i],speaker:'speaker-1'}));
+      res.end(JSON.stringify(completed(JSON.stringify({segments}))));return;
     }
     const input=JSON.parse(request.input);calls.translation.push(input.segments.map(s=>s.id));
     if(failBatch&&input.segments[0].id==='s2'){res.statusCode=401;res.end(JSON.stringify({error:{code:401,status:'UNAUTHENTICATED',message:'fixture rejected'}}));return;}
@@ -52,8 +57,17 @@ test('real SQLite checkpoints resume only untranslated batches after restart, wi
   f.store.claimNextJob('worker-a');const restarted=createPipeline({store:f.store,tools:f.tools,ai:f.ai,config:f.config,dataDir:f.dir,workerId:'worker-a'});await restarted.runJob(job.id);
   const result=f.store.getJob(job.id);assert.equal(result.status,'completed');assert.equal(result.subtitleVersion,1);assert.equal(result.renderedVersion,1);assert.equal(f.calls.transcribe,1);
   assert.deepEqual(f.calls.translation,[['s1'],['s2'],['s2'],['s3']]);assert.equal(result.usage.translation.length,3);assert.equal(result.usage.audioSeconds,3);
-  assert.equal(result.usage.translation[0].model,'gemini-3.5-flash-lite');assert.equal(result.usage.translation[0].provider,'gemini');assert.equal(result.usage.translation[0].language,'vi');assert.equal(result.usage.transcription[0].model,'gemini-3.5-transcribe');assert.equal(result.usage.transcription[0].provider,'gemini');
+  assert.equal(result.usage.translation[0].model,'gemini-3.5-flash-lite');assert.equal(result.usage.translation[0].provider,'gemini');assert.equal(result.usage.translation[0].language,'vi');assert.equal(result.usage.transcription[0].model,'gemini-3.5-flash-lite');assert.equal(result.usage.transcription[0].provider,'gemini');
   assert.equal(await readFile(f.store.getJobInternal(job.id).artifacts.videoPath,'utf8'),'mp4-1');assert.match(await readFile(f.store.getJobInternal(job.id).artifacts.srtPath,'utf8'),/Dịch three/);
+});
+
+test('real Gemini requests use the selected model for timestamped ASR and every translation batch',async t=>{
+  const f=await setup(t),job=await f.job();f.config.translationModel='gemini-4-argon';
+  f.store.claimNextJob('worker-a');await f.pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);assert.equal(result.status,'completed');
+  assert.equal(f.calls.transcribe,1);assert.deepEqual(f.calls.models,['gemini-4-argon','gemini-4-argon','gemini-4-argon','gemini-4-argon']);
+  assert.equal(result.usage.transcription[0].model,'gemini-4-argon');
+  assert.ok(result.usage.translation.every(entry=>entry.model==='gemini-4-argon'));
 });
 
 test('invalid Gemini rules remain actionable without exposing private errors',async t=>{
@@ -66,6 +80,19 @@ test('invalid Gemini rules remain actionable without exposing private errors',as
   assert.equal(f.calls.translation.length,0);
 });
 
+test('a selected Gemini model rejecting audio stops before translation and keeps an actionable safe error',async t=>{
+  const f=await setup(t),job=await f.job();let translations=0;
+  const pipeline=createPipeline({store:f.store,tools:f.tools,dataDir:f.dir,workerId:'worker-a',config:f.config,ai:{
+    transcribe:async()=>{throw Object.assign(new Error('private-provider-response fixture-secret'),{code:'AI_AUDIO_UNSUPPORTED'});},
+    translateSegments:async()=>{translations++;throw new Error('must not translate');},
+  }});
+  f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);
+  assert.equal(result.status,'failed');assert.equal(result.error.code,'AI_AUDIO_UNSUPPORTED');
+  assert.match(result.error.message,/Gemini/);assert.doesNotMatch(result.error.message,/private-provider-response|fixture-secret/);
+  assert.equal(translations,0);assert.equal(f.calls.render,0);
+});
+
 test('a run captures one coherent configuration and supplies duration to timed transcription',async t=>{
   const f=await setup(t);const job=await f.job();let reads=0,asrOptions,translationOptions;
   const pipeline=createPipeline({store:f.store,dataDir:f.dir,workerId:'worker-a',config:()=>{reads++;return f.config;},tools:{...f.tools,extractAudio:async(_,output)=>{
@@ -75,10 +102,26 @@ test('a run captures one coherent configuration and supplies duration to timed t
   }}});
   f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
   const result=f.store.getJob(job.id);assert.equal(result.status,'completed');assert.equal(reads,1);
-  assert.equal(asrOptions.apiKey,'fixture-secret');assert.equal(asrOptions.duration,3);assert.equal(asrOptions.model,'gemini-3.5-transcribe');
+  assert.equal(asrOptions.apiKey,'fixture-secret');assert.equal(asrOptions.duration,3);assert.equal(asrOptions.model,'gemini-3.5-flash-lite');
   assert.equal(translationOptions.apiKey,'fixture-secret');assert.equal(translationOptions.model,'gemini-3.5-flash-lite');
   assert.equal(result.usage.transcription[0].provider,'gemini');assert.equal(result.usage.transcription[0].model,'gemini-transcribe-version');
   assert.equal(result.usage.translation[0].provider,'gemini');assert.equal(result.usage.translation[0].model,'gemini-translation-version');
+});
+
+test('OpenAI jobs forward their provider and models to both AI stages and retain OpenAI usage',async t=>{
+  const f=await setup(t);const job=await f.job();let asrOptions,translationOptions;
+  Object.assign(f.config,{provider:'openai',apiKey:'sk-proj-fixture',transcriptionModel:'whisper-1',translationModel:'gpt-5.4-mini'});
+  const pipeline=createPipeline({store:f.store,tools:f.tools,config:f.config,dataDir:f.dir,workerId:'worker-a',ai:{
+    transcribe:async(_,options)=>{asrOptions=options;return {segments:[{id:'s1',sourceId:'s1',start:0.1,end:2,text:'Hello 🌎'}],usage:{provider:'openai',model:'whisper-1',audioSeconds:3}};},
+    translateSegments:async(segments,options)=>{translationOptions=options;return {segments:segments.map(item=>({...item,original:item.text,text:'Xin chào 🌎'})),usage:{provider:'openai',model:'gpt-5.4-mini',input_tokens:12,output_tokens:8,total_tokens:20}};},
+  }});
+  f.store.claimNextJob('worker-a');await pipeline.runJob(job.id);
+  const result=f.store.getJob(job.id);assert.equal(result.status,'completed');
+  assert.partialDeepStrictEqual(asrOptions,{provider:'openai',apiKey:'sk-proj-fixture',model:'whisper-1',duration:3});
+  assert.partialDeepStrictEqual(translationOptions,{provider:'openai',apiKey:'sk-proj-fixture',model:'gpt-5.4-mini',language:'vi'});
+  assert.equal(result.usage.transcription.length,1);assert.partialDeepStrictEqual(result.usage.transcription[0],{provider:'openai',model:'whisper-1',audioSeconds:3});
+  assert.equal(result.usage.translation.length,1);assert.partialDeepStrictEqual(result.usage.translation[0],{provider:'openai',model:'gpt-5.4-mini',input_tokens:12,output_tokens:8,total_tokens:20});
+  assert.equal(f.store.getCues(job.id)[0].text,'Xin chào 🌎');assert.doesNotMatch(JSON.stringify(result),/sk-proj-fixture/);
 });
 
 test('Gemini resumes valid legacy checkpoints without repeating ASR or changing historical usage',async t=>{

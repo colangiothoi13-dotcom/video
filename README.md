@@ -21,13 +21,17 @@ Sau lần cài đầu, nhấp đúp **Khoi-dong.cmd**. Launcher cài phụ thu�
 
 ## Khóa API và mô hình
 
-Trong **Cài đặt**, nhập khóa Gemini API được tạo tại [Google AI Studio](https://aistudio.google.com/api-keys), bấm **Lưu cài đặt**, sau đó **Kiểm tra kết nối**. Kiểm tra này chỉ đọc quyền truy cập mô hình, chưa xác nhận hạn mức hoặc xử lý video; cần chạy video có lời nói để kiểm tra đầy đủ quy trình. Khóa không được hiển thị lại, không lưu trong localStorage và không đưa vào Git. Để trống ô thay khóa khi muốn giữ nguyên khóa Gemini hiện tại.
+Trong **Cài đặt**, chọn **OpenAI** hoặc **Google Gemini** ở danh sách **Nhà cung cấp AI**, nhập khóa của nhà cung cấp đó và chọn mô hình từ danh sách. Bấm **Lưu cài đặt**, sau đó **Kiểm tra kết nối**. Phải lưu thay đổi nhà cung cấp, khóa hoặc mô hình trước khi kiểm tra. Mỗi nhà cung cấp giữ khóa và mô hình riêng; khi chuyển nhà cung cấp, ứng dụng nạp lại mô hình đã lưu của nhà cung cấp đó và xóa nội dung ô nhập khóa chưa lưu.
 
-Mặc định dịch bằng `gemini-3.5-flash-lite`; có thể thay bằng tên mô hình Gemini mà tài khoản của bạn được cấp quyền. Nhận dạng lời nói và mốc thời gian dùng `gemini-3.5-transcribe`. Cả hai bước đều dùng Google Gemini API; ứng dụng không gọi OpenAI hoặc tự chuyển sang OpenAI khi gặp lỗi.
+Với **Google Gemini**, mô hình đã chọn được dùng xuyên suốt cho nhận dạng lời nói, mốc thời gian từng đoạn, dịch phụ đề và viết kịch bản/lập kế hoạch video. Ví dụ chọn `gemini-4-argon` thì các bước AI mới dùng chính Argon; ứng dụng không tự chuyển sang `gemini-3.5-transcribe`. Mô hình cần hỗ trợ âm thanh và dữ liệu có cấu trúc; nếu từ chối yêu cầu, ứng dụng báo lỗi để bạn chọn lại. Mốc thời gian do mô hình trả về được kiểm tra thứ tự và giới hạn theo âm thanh, không phải kết quả căn chỉnh bắt buộc đến từng từ. Kết quả và checkpoint đã xử lý vẫn được giữ; đổi mô hình không tự chạy lại các bước cũ. Tạo clip chuyển động tiếp tục dùng Veo.
 
-Gemini có hạn mức miễn phí, không phải sử dụng không giới hạn; khả năng truy cập và hạn mức phụ thuộc tài khoản, khu vực và mô hình. Google tính phí nếu bạn dùng gói trả phí. Theo [bảng giá Gemini và chính sách dữ liệu](https://ai.google.dev/gemini-api/docs/pricing), nội dung gửi qua gói miễn phí được dùng để cải thiện sản phẩm Google. Âm thanh và nội dung phụ đề được gửi tới Google để xử lý.
+Tạo khóa OpenAI tại [OpenAI Platform](https://platform.openai.com/api-keys). Một khóa OpenAI dùng cho nhận dạng lời nói bằng `whisper-1`, dịch phụ đề và viết kịch bản bằng mô hình đã chọn. Tài khoản API có thể khác tài khoản ChatGPT đang đăng nhập; phí API tính theo dự án của khóa, riêng với gói ChatGPT. Tạo khóa Gemini tại [Google AI Studio](https://aistudio.google.com/api-keys) nếu bạn chọn Google Gemini. Âm thanh và nội dung được gửi tới nhà cung cấp đã lưu để xử lý.
 
-Có thể cấu hình qua `GEMINI_API_KEY` và `GEMINI_TRANSLATION_MODEL`; biến môi trường Gemini được ưu tiên hơn cài đặt trên đĩa và không được sao chép vào tệp cấu hình. Cấu hình OpenAI cũ và các biến `OPENAI_API_KEY` / `OPENAI_TRANSLATION_MODEL` không được sử dụng. Tệp cấu hình cũ được giữ nguyên cho đến khi bạn lưu cài đặt Gemini; cần nhập khóa Gemini mới trước khi tạo công việc mới. Checkpoint lời nói/bản dịch hợp lệ từ công việc cũ vẫn được dùng để tiếp tục xử lý, giữ nguyên ghi nhận sử dụng trước đó.
+**Kiểm tra kết nối** chỉ xác nhận quyền truy cập mô hình đã lưu, không tạo nội dung và không phát sinh phí tạo nội dung. Kiểm tra này chưa xác nhận hạn mức, nhận dạng lời nói hoặc toàn bộ quy trình; cần chạy video có lời nói để kiểm tra đầy đủ. Khóa không được hiển thị lại, không lưu trong localStorage và không đưa vào Git. Để trống ô thay khóa để giữ khóa hiện tại của nhà cung cấp tương ứng.
+
+**Khóa Google API cho Veo** là trường riêng, tùy chọn. Khi chọn OpenAI, bạn chỉ cần thêm khóa Google nếu muốn tạo clip Veo; nhận dạng lời nói, dịch phụ đề và viết kịch bản vẫn dùng OpenAI. Khóa Google phải có quyền truy cập Veo; phí clip tính theo dự án Google. Ứng dụng không tự đổi nhà cung cấp khi gặp lỗi.
+
+Các cấu hình OpenAI cũ hợp lệ tiếp tục được dùng. Nếu một khóa OpenAI trước đây bị lưu nhầm vào cấu hình Gemini, ứng dụng nhận diện và chuyển sang OpenAI mà không hiển thị khóa cho trình duyệt. Checkpoint lời nói/bản dịch hợp lệ từ công việc cũ vẫn được dùng để tiếp tục xử lý, giữ nguyên ghi nhận sử dụng trước đó.
 
 ## Dịch, sửa và tải video
 
@@ -40,7 +44,40 @@ Nếu phiên khác sửa cùng phụ đề, ứng dụng giữ bản đang soạ
 
 Web tự đọc thời lượng và xử lý trọn video nguồn đã kết thúc, không chặn ở 25 phút. Video từ link tối đa 5 GB; tệp tải lên từ máy tối đa 500 MB. Âm thanh dài hơn 30 phút được nhận dạng tuần tự theo các phần tối đa 20 phút rồi ghép mốc về video gốc, kể cả phần cuối ngắn. Kết quả MP4 H.264/AAC tối đa 720p theo hướng nguồn, giữ tỉ lệ, không phóng lớn video nhỏ. SRT dùng UTF-8, tối đa hai dòng mỗi đoạn; câu dịch dài được cảnh báo để rút gọn. Nguồn không có âm thanh/lời nói, tệp lỗi và nội dung riêng tư/DRM có thể không xử lý được. Nhãn người nói thuộc từng phần âm thanh riêng; cùng nhân vật ở các phần khác nhau có thể cần đổi lại vai/giọng trong phần lồng tiếng.
 
+## Video từ ý tưởng: kịch bản, prompt và tạo từng scene
+
+Mở **Video từ ý tưởng** để kể chuyện, làm phim ngắn, tình huống đời thường hoặc giới thiệu sản phẩm theo nội dung bạn muốn. Nhập ý tưởng và mô tả một hoặc nhiều nhân vật trưởng thành; mỗi nhân vật nên có tên, ngoại hình và trang phục riêng. **Sản phẩm / đạo cụ là tùy chọn**, có thể bỏ trống. Nhà cung cấp AI đã chọn phát triển thành năm cảnh theo câu chuyện, không áp đặt khuôn quảng cáo. Mỗi cảnh có thời lượng, hành động, hình ảnh và prompt gồm bối cảnh, góc máy, chuyển động máy, ánh sáng, chất liệu, cinematic và âm thanh.
+
+Có thể thêm tối đa **3 ảnh tham chiếu tổng cộng**, dùng cả ba cho nhân vật hoặc dành tối đa một ảnh cho sản phẩm / đạo cụ. Chọn nhiều ảnh nhân vật cùng lúc hoặc thêm từng ảnh, rồi nhập tên nhân vật tương ứng dưới mỗi ảnh để khớp với mô tả. Mỗi ảnh PNG/JPEG tối đa 256 KiB; có thể bỏ riêng từng ảnh. Chọn ảnh sản phẩm mới sẽ thay ảnh sản phẩm đã chọn. Ảnh và sản phẩm đều không bắt buộc.
+
+Hồ sơ nhân vật/sản phẩm dùng chung được khóa sau khi tạo kịch bản. Mỗi scene có ô prompt riêng và bản prompt đầy đủ để xem/sao chép; phần nhận diện dùng chung được máy chủ ghép vào mọi yêu cầu tạo video. Muốn thay nhận diện chung, tạo dự án mới. Sửa và lưu Scene 3 chỉ cập nhật phiên bản Scene 3; bốn cảnh còn lại giữ nguyên. Dự án được lưu trên máy để mở lại; bản nháp chưa lưu được bảo vệ khi chuyển màn hình và không bị polling ghi đè.
+
+- Luồng quản lý: **Ý tưởng → Kịch bản → Danh sách Scene → Prompt → Video Preview**; trạng thái lấy từ dữ liệu đã lưu và tiến trình thật.
+- Mỗi scene có bốn nút chính: **Prompt** mở biên tập; **Generate** tạo clip còn thiếu/cũ; **Preview** chỉ xem clip đã lưu; **Regenerate** chủ động tạo lại riêng cảnh và giữ mọi bản cũ. Lưu prompt là thao tác riêng, chưa tự tạo clip.
+- **Generate All Scenes:** tạo những cảnh chưa có clip khớp với phiên bản prompt hiện tại, giữ clip đã hoàn thành.
+- **Generate Video:** tạo các cảnh còn thiếu rồi ghép năm clip thành MP4 theo thứ tự; khi đã đủ clip thì chỉ ghép bằng FFmpeg.
+
+**Reset Project** đưa giao diện về ý tưởng mới, xóa dữ liệu đang nhập/chọn và bản nháp sau khi xác nhận nếu cần; không xóa dự án hoặc lịch sử đã lưu. Xóa dự án là nút riêng. **Lịch sử cảnh** lưu từng lần tạo với prompt đúng lúc gửi, thời lượng, mô hình, trạng thái và clip tương ứng; có thể chọn bản cũ để xem và so sánh prompt mà không sửa cảnh hiện tại. Những clip đã có trước khi bổ sung lịch sử vẫn được giữ để xem, không gán ngày hoặc prompt suy đoán.
+
+Nút **Điền ví dụ** trong phần thời trang café chuẩn bị ý tưởng cô gái trưởng thành giới thiệu trang phục trong quán café hiện đại. Nút chỉ điền biểu mẫu; bạn xem lại rồi chủ động bấm tạo kịch bản. Giao diện quản lý có bố cục PC và mobile, với bốn nút scene xếp gọn thành hai cột trên màn hình hẹp.
+
+Tạo kịch bản dùng nhà cung cấp và mô hình đã lưu trong Cài đặt. Tạo video dùng `veo-3.1-generate-preview`, có thể cấu hình bằng `GEMINI_VIDEO_MODEL`; bản `veo-3.1-fast-generate-preview` chỉ dùng khi không có ảnh tham chiếu. Veo được gọi qua API Google, không điều khiển giao diện Flow. Khóa Google cần có quyền truy cập Veo và hạn mức/gói thanh toán phù hợp. Việc tạo clip có thể phát sinh phí; mở màn hình không tự tạo clip. Thời lượng từng cảnh là 4, 6 hoặc 8 giây ở 720p; khi dùng ảnh tham chiếu, Veo yêu cầu 8 giây. Xem [tài liệu Veo chính thức](https://ai.google.dev/gemini-api/docs/veo) để đối chiếu giới hạn tài khoản và mô hình.
+
+Prompt và ảnh tham chiếu cố định giúp giữ nhận diện xuyên suốt; mô hình sinh video không bảo đảm nhân vật hoặc sản phẩm giống tuyệt đối ở mọi khung hình. Xem lại clip từng cảnh trước khi sử dụng. Clip lỗi có thông báo riêng; không hiển thị video giả hoặc báo hoàn thành khi chưa có tệp thật.
+
+Operation Google được lưu trên máy. Đóng tab không dừng quá trình tạo ở Google; mở lại dự án để lấy trạng thái và tải kết quả. Nếu máy chủ dừng đúng lúc gửi lệnh tạo mà chưa nhận được operation ID, ứng dụng không tự gửi lại yêu cầu có thể tính phí lần hai; kiểm tra tài khoản Google trước khi chủ động thử lại. Các clip đã thành công vẫn được giữ khi một cảnh khác lỗi. Dữ liệu scene được giữ riêng trong `.data` đến khi bạn xóa dự án; thời hạn 24 giờ của công việc phụ đề không áp dụng cho dự án scene.
+
+Các kiểm tra kịch bản/operation dùng HTTP fixture cục bộ; ghép MP4 được kiểm tra bằng FFmpeg thật. Chưa nghiệm thu tạo kịch bản và clip bằng tài khoản Veo thật khi chưa có API key có quyền truy cập. Nhập khóa trong Cài đặt, không gửi khóa trong trò chuyện.
+
+## Video từ giọng gốc — tính năng mới
+
+Mở **Video từ giọng gốc** và dán link YouTube hoặc Facebook công khai. Ứng dụng lấy lời đọc trong nguồn, chia cảnh theo thời gian, tạo hình chân thực có chuyển động rồi ghép MP4 720p với âm thanh gốc. Có thể xem trước, sửa mô tả và tạo lại riêng từng cảnh. Mục này có dự án/lịch sử riêng; các chức năng hiện có giữ nguyên cách dùng.
+
+Nhận dạng và lập cảnh dùng nhà cung cấp AI đã chọn; tạo clip cần khóa Google có quyền Veo và có thể phát sinh phí theo số cảnh. Web tự đọc và xử lý trọn thời lượng nguồn, tối đa 5 GB, không giới hạn 25 phút. Track âm thanh nguồn được giữ cùng nhạc nền/hiệu ứng vốn có; không tạo giọng mới. Xem [hướng dẫn đầy đủ](docs/narrated.md).
+
 ## Chạy nền và tắt máy
+
+Bản hiện tại chạy **local trên máy bạn**, truy cập tại `http://127.0.0.1:3000/#studio`. Mở `Khoi-dong.cmd` trong thư mục `web`, hoặc chạy `npm start` sau khi đã build. OpenAI/Gemini/Veo vẫn cần Internet và API key; chạy local không có nghĩa các mô hình AI chạy ngoại tuyến. Không có bước xuất bản công khai trong bản này.
 
 Giữ cửa sổ launcher/terminal mở đến khi công việc hoàn thành. Thu nhỏ cửa sổ để tiếp tục làm việc; đóng tab trình duyệt không dừng máy chủ. Đóng cửa sổ máy chủ, nhấn Ctrl+C hoặc tắt/ngủ máy sẽ ngắt việc xử lý. Mở lại launcher để bộ xử lý kiểm tra checkpoint và khôi phục công việc hợp lệ. Không mở nhiều bản ứng dụng để tăng tốc; chỉ một video chạy mỗi lần.
 
@@ -50,7 +87,7 @@ Dữ liệu ứng dụng, cấu hình máy chủ, cơ sở dữ liệu và các 
 
 Kết quả trên máy được giữ 24 giờ kể từ **lần xuất thành công đầu tiên**, xuất lại không gia hạn. Công việc lỗi/hủy được giữ 24 giờ từ trạng thái đó. Phiên tải lên dở được dọn sau một giờ không hoạt động. Dọn dẹp chạy mỗi 15 phút và bảo vệ tệp đang xử lý. Hãy tải MP4/SRT cần giữ trước thời điểm hết hạn hiển thị trong trình biên tập.
 
-Thời hạn 24 giờ chỉ áp dụng dữ liệu trên máy. Ứng dụng yêu cầu xóa tệp âm thanh tạm trên Google sau khi xử lý; nếu xóa không thành công, [Gemini Files tự hết hạn sau 48 giờ](https://ai.google.dev/gemini-api/docs/files). Chính sách dữ liệu của Google vẫn áp dụng cho nội dung đã gửi.
+Thời hạn 24 giờ chỉ áp dụng dữ liệu trên máy. Khi dùng Gemini, ứng dụng yêu cầu xóa tệp âm thanh tạm trên Google sau khi xử lý; nếu xóa không thành công, [Gemini Files tự hết hạn sau 48 giờ](https://ai.google.dev/gemini-api/docs/files). Chính sách dữ liệu của nhà cung cấp vẫn áp dụng cho nội dung đã gửi.
 
 ## Khi gặp lỗi
 
@@ -72,4 +109,4 @@ npm run build
 
 `tests/acceptance.mjs` có các ca tự động cho giao ước phía trình duyệt và danh sách kiểm tra nghiệm thu UI/E2E. Nghiệm thu hai luồng upload/URL cần khóa API hợp lệ, video có lời nói và kiểm tra MP4/SRT đến cuối video; kiểm tra kết nối riêng lẻ không thay thế các ca này.
 
-Trạng thái chuyển đổi Gemini: chưa xác minh hai luồng upload/URL bằng khóa Gemini thật hoặc kiểm tra độ chính xác mốc thời gian trên video có lời nói. Các kiểm tra HTTP local dùng phản hồi Gemini mô phỏng để xác minh giao ước và khả năng tiếp tục checkpoint; chúng không thay thế kiểm tra dịch vụ thực tế. Nhập khóa trực tiếp trong Cài đặt khi bạn muốn dùng Gemini; không cần gửi khóa trong trò chuyện.
+Chưa xác minh hai luồng upload/URL bằng khóa API thật hoặc kiểm tra độ chính xác mốc thời gian trên video có lời nói. Các kiểm tra HTTP local dùng phản hồi AI mô phỏng để xác minh giao ước và khả năng tiếp tục checkpoint; chúng không thay thế kiểm tra dịch vụ thực tế. Nhập khóa trực tiếp trong Cài đặt; không cần gửi khóa trong trò chuyện.

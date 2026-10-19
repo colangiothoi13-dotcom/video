@@ -116,9 +116,14 @@ test('configuration persists server secrets while public status never returns th
   const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
   const { dir } = fixture(t);
   const options = { dataDir: dir, env: {} };
-  assert.deepEqual(getConfigStatus(options), { provider: 'gemini', configured: false, translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-transcribe' });
+  const initial = getConfigStatus(options);
+  assert.partialDeepStrictEqual(initial, { provider: 'gemini', configured: false, translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-flash-lite', videoConfigured: false });
+  assert.partialDeepStrictEqual(initial.providers, { gemini: { configured: false }, openai: { configured: false, translationModel: 'gpt-5.4-mini', transcriptionModel: 'whisper-1' } });
+  assert.ok(initial.providers.openai.translationModels.some(model => model.id === 'gpt-5.4-mini'));
   const status = writeConfig({ apiKey: 'gemini-secret-unit-test', translationModel: 'gemini-example' }, options);
-  assert.deepEqual(status, { provider: 'gemini', configured: true, translationModel: 'gemini-example', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.partialDeepStrictEqual(status, { provider: 'gemini', configured: true, translationModel: 'gemini-example', transcriptionModel: 'gemini-example', videoConfigured: true });
+  assert.partialDeepStrictEqual(status.providers, { gemini: { configured: true, translationModel: 'gemini-example' }, openai: { configured: false } });
+  assert.ok(status.translationModels.some(model => model.id === 'gemini-example'), 'saved models remain selectable');
   assert.equal(readConfig(options).apiKey, 'gemini-secret-unit-test');
   writeConfig({ translationModel: 'gemini-second' }, options);
   assert.equal(readConfig(options).apiKey, 'gemini-secret-unit-test');
@@ -131,27 +136,31 @@ test('environment credentials override settings without being copied into saved 
   const { dir } = fixture(t);
   const options = { dataDir: dir, env: { GEMINI_API_KEY: 'gemini-environment-only', GEMINI_TRANSLATION_MODEL: 'gemini-environment' } };
   writeConfig({ translationModel: 'gemini-saved' }, options);
-  assert.deepEqual(readConfig(options), { provider: 'gemini', apiKey: 'gemini-environment-only', translationModel: 'gemini-environment', transcriptionModel: 'gemini-3.5-transcribe' });
-  assert.deepEqual(getConfigStatus(options), { provider: 'gemini', configured: true, translationModel: 'gemini-environment', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.partialDeepStrictEqual(readConfig(options), { provider: 'gemini', apiKey: 'gemini-environment-only', translationModel: 'gemini-environment', transcriptionModel: 'gemini-environment', videoApiKey: 'gemini-environment-only', providerConfigs: { gemini: { apiKey: 'gemini-environment-only', translationModel: 'gemini-environment' }, openai: { apiKey: '' } } });
+  assert.partialDeepStrictEqual(getConfigStatus(options), { provider: 'gemini', configured: true, translationModel: 'gemini-environment', transcriptionModel: 'gemini-environment', videoConfigured: true, providers: { gemini: { configured: true }, openai: { configured: false } } });
+  assert.doesNotMatch(JSON.stringify(getConfigStatus(options)), /gemini-environment-only/);
   assert.equal(readFileSync(join(dir, 'config.json'), 'utf8').includes('gemini-environment-only'), false);
   writeConfig({ apiKey: 'gemini-saved' }, options);
-  assert.deepEqual(readConfig({ dataDir: dir, env: {} }), { provider: 'gemini', apiKey: 'gemini-saved', translationModel: 'gemini-saved', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.partialDeepStrictEqual(readConfig({ dataDir: dir, env: {} }), { provider: 'gemini', apiKey: 'gemini-saved', translationModel: 'gemini-saved', transcriptionModel: 'gemini-saved', videoApiKey: 'gemini-saved', providerConfigs: { gemini: { apiKey: 'gemini-saved', translationModel: 'gemini-saved' }, openai: { apiKey: '' } } });
   assert.equal(readConfig(options).apiKey, 'gemini-environment-only');
 });
 
-test('legacy OpenAI disk and environment settings cannot configure Gemini and disk remains untouched until saved', async t => {
+test('unqualified legacy keys stay ignored while OpenAI environment settings remain separate from Gemini', async t => {
   const { readConfig, writeConfig, getConfigStatus } = await import(configModule);
   const { dir } = fixture(t);
   const legacy = JSON.stringify({ apiKey: 'legacy-openai-secret', translationModel: 'gpt-legacy' });
   const file = join(dir, 'config.json'); writeFileSync(file, legacy);
   const options = { dataDir: dir, env: { OPENAI_API_KEY: 'old-env-secret', OPENAI_TRANSLATION_MODEL: 'gpt-old-env' } };
   assert.equal(getConfigStatus(options).configured, false);
-  assert.deepEqual(readConfig(options), { provider: 'gemini', apiKey: '', translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-transcribe' });
+  assert.partialDeepStrictEqual(readConfig(options), { provider: 'gemini', apiKey: '', translationModel: 'gemini-3.5-flash-lite', transcriptionModel: 'gemini-3.5-flash-lite', videoApiKey: '', providerConfigs: { gemini: { apiKey: '' }, openai: { apiKey: 'old-env-secret', translationModel: 'gpt-old-env', transcriptionModel: 'whisper-1' } } });
+  assert.partialDeepStrictEqual(getConfigStatus(options), { configured: false, videoConfigured: false, providers: { gemini: { configured: false }, openai: { configured: true, translationModel: 'gpt-old-env' } } });
+  assert.doesNotMatch(JSON.stringify(getConfigStatus(options)), /legacy-openai-secret|old-env-secret/);
   assert.equal(readFileSync(file, 'utf8'), legacy);
   writeConfig({ apiKey: 'new-gemini-secret' }, options);
   assert.equal(readConfig(options).apiKey, 'new-gemini-secret');
   assert.equal(readConfig(options).translationModel, 'gemini-3.5-flash-lite');
   assert.equal(readFileSync(file, 'utf8').includes('legacy-openai-secret'), false);
+  assert.equal(readFileSync(file, 'utf8').includes('old-env-secret'), false);
 });
 
 test('non-Gemini model settings fail before changing the saved key or model', async t => {

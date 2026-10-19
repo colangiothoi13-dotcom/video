@@ -1,0 +1,21 @@
+.referenceDetails {
+  flex: 1;
+  min-width: 0;
+}
+
+.referenceDetails > span {
+  display: block;
+}
+
+.referenceDetails > label {
+  margin: 7px 0 4px;
+  line-height: 1.5;
+}
+
+.referenceDetails > input {
+  width: 100%;
+}
+
+.characters {
+  white-space: pre-line;
+}
