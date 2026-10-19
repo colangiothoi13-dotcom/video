@@ -4,7 +4,7 @@
 
 ## Cài đặt lần đầu
 
-Cần Node.js 24.21 trở lên, npm và kết nối Internet để tải phụ thuộc, công cụ và gọi dịch vụ AI. Mở PowerShell trong thư mục `web`:
+Cần Node.js 24.21 trở lên, npm và kết nối Internet để tải phụ thuộc, công cụ và gọi dịch vụ AI. Sau khi clone repo, mở PowerShell trong thư mục chứa `package.json`:
 
 ```powershell
 npm install
@@ -73,7 +73,7 @@ Nhận dạng và lập cảnh dùng nhà cung cấp AI đã chọn; tạo clip 
 
 ## Chạy nền và tắt máy
 
-Bản hiện tại chạy **local trên máy bạn**, truy cập tại `http://127.0.0.1:3000/#studio`. Mở `Khoi-dong.cmd` trong thư mục `web`, hoặc chạy `npm start` sau khi đã build. OpenAI/Gemini/Veo vẫn cần Internet và API key; chạy local không có nghĩa các mô hình AI chạy ngoại tuyến. Không có bước xuất bản công khai trong bản này.
+Bản hiện tại chạy **local trên máy bạn**, truy cập tại `http://127.0.0.1:3000/#studio`. Mở `Khoi-dong.cmd` trong thư mục dự án, hoặc chạy `npm start` sau khi đã build. OpenAI/Gemini/Veo vẫn cần Internet và API key; chạy local không có nghĩa các mô hình AI chạy ngoại tuyến. Không có bước xuất bản công khai trong bản này.
 
 Giữ cửa sổ launcher/terminal mở đến khi công việc hoàn thành. Thu nhỏ cửa sổ để tiếp tục làm việc; đóng tab trình duyệt không dừng máy chủ. Đóng cửa sổ máy chủ, nhấn Ctrl+C hoặc tắt/ngủ máy sẽ ngắt việc xử lý. Mở lại launcher để bộ xử lý kiểm tra checkpoint và khôi phục công việc hợp lệ. Không mở nhiều bản ứng dụng để tăng tốc; chỉ một video chạy mỗi lần.
 
